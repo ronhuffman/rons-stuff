@@ -1,0 +1,104 @@
+# Sanitized laundry sections. Map the four washer_plug entities locally.
+# These Shelly-integration entities are not defined by laundry-package.example.yaml.
+title: Laundry
+views:
+  - title: Utility Room
+    path: utility-room
+    type: sections
+    max_columns: 3
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Washer
+            heading_style: title
+          - type: tile
+            entity: sensor.washer_plug_current
+            name: Washer Current
+            vertical: false
+            features_position: bottom
+          - type: tile
+            entity: sensor.washer_plug_power
+            name: Washer Power
+            vertical: false
+            features_position: bottom
+          - type: tile
+            entity: sensor.washer_state
+            name: Washer State
+            vertical: false
+            features_position: bottom
+          - type: tile
+            entity: sensor.washer_plug_voltage
+            name: Washer Voltage
+            vertical: false
+            features_position: bottom
+          - type: tile
+            entity: sensor.washer_plug_temperature
+            name: Washer Plug Temperature
+            grid_options:
+              columns: 12
+              rows: 1
+            vertical: false
+            features_position: bottom
+      - type: grid
+        cards:
+          - type: heading
+            heading: Dryer
+            heading_style: title
+            icon: mdi:tumble-dryer
+          - type: tile
+            entity: sensor.utility_room_dryer_state
+            name: Dryer State
+            vertical: false
+            features_position: bottom
+          - type: tile
+            entity: binary_sensor.utility_room_dryer_running
+            name: Dryer Running
+            vertical: false
+            features_position: bottom
+          - type: tile
+            entity: binary_sensor.utility_room_dryer_complete
+            name: Dryer Complete
+            vertical: false
+            features_position: bottom
+          - type: tile
+            entity: sensor.utility_room_dryer_rms
+            name: Dryer RMS
+            vertical: false
+            features_position: bottom
+      - type: grid
+        cards:
+          - type: heading
+            heading: Lighting
+            heading_style: title
+          - type: gauge
+            entity: sensor.utility_room_lux
+            name: Utility Room Lux
+            max: 12
+            needle: true
+            unit: Lux
+          - type: tile
+            entity: sensor.utility_room_light_state
+            name: Light State
+            vertical: false
+            features_position: bottom
+          - type: tile
+            entity: binary_sensor.utility_room_civil_dark
+            name: Civil Dark
+            vertical: false
+            features_position: bottom
+          - type: tile
+            entity: binary_sensor.utility_room_light_timer_active
+            name: 10-Minute Timer
+            vertical: false
+            features_position: bottom
+          - type: tile
+            entity: sensor.utility_room_light_timer_remaining
+            name: Light Timer Remaining
+            vertical: false
+            features_position: bottom
+          - type: tile
+            entity: binary_sensor.utility_room_light_alert
+            name: 10-Minute Light Alert
+            vertical: false
+            features_position: bottom

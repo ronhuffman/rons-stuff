@@ -1,0 +1,2 @@
+# Only needed for test_public_snapshot.py; firmware tests use Python's stdlib.
+PyYAML==6.0.3

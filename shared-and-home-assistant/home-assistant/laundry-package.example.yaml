@@ -1,0 +1,143 @@
+# Selected from the inspected live configuration; sanitized and packaged.
+# Existing template behavior is preserved, including its numeric defaults.
+sensor:
+  - platform: rest
+    name: "Washer State"
+    unique_id: washer_pico_state
+    resource: !secret washer_pico_status_url
+    value_template: "{{ value_json.state }}"
+    json_attributes:
+      - internal_state
+      - alert_active
+      - watts
+      - shelly_online
+      - cycle_number
+    scan_interval: 15
+    timeout: 5
+
+  - platform: rest
+    name: "Utility Room Pico"
+    unique_id: utility_room_pico
+    resource: !secret dryer_pico_status_url
+    value_template: "{{ value_json.dryer_state }}"
+    json_attributes:
+      - dryer_running
+      - dryer_complete
+      - vibration
+      - rms
+      - lux
+      - light_state
+      - civil_dark
+      - dark_reason
+      - clock_valid
+      - light_timer_active
+      - light_timer_elapsed
+      - light_timer_remaining
+      - light_alert_active
+      - bulb_alert_active
+    scan_interval: 15
+    timeout: 10
+
+rest_command:
+  washer_acknowledge:
+    url: !secret washer_pico_ack_url
+    method: POST
+    timeout: 10
+
+template:
+  - sensor:
+      - name: "Utility Room Dryer State"
+        unique_id: utility_room_dryer_state
+        availability: "{{ states('sensor.utility_room_pico') not in ['unknown', 'unavailable'] }}"
+        state: "{{ states('sensor.utility_room_pico') }}"
+        icon: mdi:tumble-dryer
+      - name: "Utility Room Dryer RMS"
+        unique_id: utility_room_dryer_rms
+        availability: "{{ states('sensor.utility_room_pico') not in ['unknown', 'unavailable'] }}"
+        state: >
+          {{ state_attr('sensor.utility_room_pico', 'rms')
+             | float(0) | round(1) }}
+        state_class: measurement
+        icon: mdi:vibrate
+      - name: "Utility Room Vibration"
+        unique_id: utility_room_vibration
+        availability: "{{ states('sensor.utility_room_pico') not in ['unknown', 'unavailable'] }}"
+        state: >
+          {{ state_attr('sensor.utility_room_pico', 'vibration')
+             | float(0) | round(1) }}
+        state_class: measurement
+        icon: mdi:waveform
+      - name: "Utility Room Lux"
+        unique_id: utility_room_lux
+        availability: "{{ states('sensor.utility_room_pico') not in ['unknown', 'unavailable'] }}"
+        state: >
+          {{ state_attr('sensor.utility_room_pico', 'lux')
+             | float(0) | round(1) }}
+        unit_of_measurement: "lx"
+        device_class: illuminance
+        state_class: measurement
+        icon: mdi:brightness-5
+      - name: "Utility Room Light State"
+        unique_id: utility_room_light_state
+        availability: "{{ states('sensor.utility_room_pico') not in ['unknown', 'unavailable'] }}"
+        state: "{{ state_attr('sensor.utility_room_pico', 'light_state') }}"
+        icon: mdi:lightbulb-outline
+      - name: "Utility Room Darkness Reason"
+        unique_id: utility_room_darkness_reason
+        availability: "{{ states('sensor.utility_room_pico') not in ['unknown', 'unavailable'] }}"
+        state: "{{ state_attr('sensor.utility_room_pico', 'dark_reason') }}"
+        icon: mdi:weather-night
+      - name: "Utility Room Light Timer Elapsed"
+        unique_id: utility_room_light_timer_elapsed
+        availability: "{{ states('sensor.utility_room_pico') not in ['unknown', 'unavailable'] }}"
+        state: >
+          {{ state_attr('sensor.utility_room_pico', 'light_timer_elapsed')
+             | float(0) | round(0) }}
+        unit_of_measurement: "s"
+        device_class: duration
+        icon: mdi:timer-outline
+      - name: "Utility Room Light Timer Remaining"
+        unique_id: utility_room_light_timer_remaining
+        availability: "{{ states('sensor.utility_room_pico') not in ['unknown', 'unavailable'] }}"
+        state: >
+          {{ state_attr('sensor.utility_room_pico', 'light_timer_remaining')
+             | float(0) | round(0) }}
+        unit_of_measurement: "s"
+        device_class: duration
+        icon: mdi:timer-sand
+  - binary_sensor:
+      - name: "Utility Room Dryer Running"
+        unique_id: utility_room_dryer_running
+        availability: "{{ states('sensor.utility_room_pico') not in ['unknown', 'unavailable'] }}"
+        state: "{{ state_attr('sensor.utility_room_pico', 'dryer_running') | bool(false) }}"
+        icon: mdi:tumble-dryer
+      - name: "Utility Room Dryer Complete"
+        unique_id: utility_room_dryer_complete
+        availability: "{{ states('sensor.utility_room_pico') not in ['unknown', 'unavailable'] }}"
+        state: "{{ state_attr('sensor.utility_room_pico', 'dryer_complete') | bool(false) }}"
+        icon: mdi:check-circle-outline
+      - name: "Utility Room Civil Dark"
+        unique_id: utility_room_civil_dark
+        availability: "{{ states('sensor.utility_room_pico') not in ['unknown', 'unavailable'] }}"
+        state: "{{ state_attr('sensor.utility_room_pico', 'civil_dark') | bool(false) }}"
+        icon: mdi:weather-night
+      - name: "Utility Room Light Timer Active"
+        unique_id: utility_room_light_timer_active
+        availability: "{{ states('sensor.utility_room_pico') not in ['unknown', 'unavailable'] }}"
+        state: "{{ state_attr('sensor.utility_room_pico', 'light_timer_active') | bool(false) }}"
+        icon: mdi:timer-sand
+      - name: "Utility Room Light Alert"
+        unique_id: utility_room_light_alert
+        availability: "{{ states('sensor.utility_room_pico') not in ['unknown', 'unavailable'] }}"
+        state: "{{ state_attr('sensor.utility_room_pico', 'light_alert_active') | bool(false) }}"
+        icon: mdi:alert-circle-outline
+      - name: "Utility Room KAUF Alert"
+        unique_id: utility_room_kauf_alert
+        availability: "{{ states('sensor.utility_room_pico') not in ['unknown', 'unavailable'] }}"
+        state: "{{ state_attr('sensor.utility_room_pico', 'bulb_alert_active') | bool(false) }}"
+        icon: mdi:alarm-light-outline
+      - name: "Utility Room Pico Clock Valid"
+        unique_id: utility_room_pico_clock_valid
+        availability: "{{ states('sensor.utility_room_pico') not in ['unknown', 'unavailable'] }}"
+        state: "{{ state_attr('sensor.utility_room_pico', 'clock_valid') | bool(false) }}"
+        icon: mdi:clock-check-outline
