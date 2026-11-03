@@ -1575,6 +1575,13 @@ class CleanTab(ttk.Frame):
                           "\nRestart Sweep as administrator to clean those.")
             if rep.failed:
                 extra += f"\n\n{rep.failed:,} file(s) failed for other reasons."
+            if rep.restore_point:
+                extra += f"\n\nRestore point: {rep.restore_point}"
+            action_errors = [o.action_result for o in rep.outcomes
+                             if o.action_result and str(o.action_result).startswith("error")]
+            if action_errors:
+                extra += ("\n\nSystem actions that failed:\n"
+                          + "\n".join(f"  {e}" for e in action_errors[:5]))
             messagebox.showinfo(
                 "Clean complete",
                 f"Freed {base.human(rep.bytes)} ({rep.deleted:,} files).{extra}\n\n"
@@ -3181,6 +3188,8 @@ class SweepApp(tk.Tk):
                           variable=self.elevate_var, command=self._toggle_auto_elevate)
         if not base.is_admin():
             m.add_command(label="Restart as administrator now", command=self._elevate)
+        m.add_command(label="Create a restore point now",
+                      command=self._make_restore_point)
         m.add_separator()
         m.add_command(label="Keyboard shortcuts", command=self._shortcuts)
         m.add_command(label="About Sweep", command=self._about)
@@ -3191,6 +3200,21 @@ class SweepApp(tk.Tk):
                        anchor.winfo_rooty())
         finally:
             m.grab_release()
+
+    def _make_restore_point(self) -> None:
+        """Create a System Restore point and report exactly what happened."""
+        from . import system
+        ok, msg = system.create_restore_point("Sweep: manual restore point")
+        self.set_status(msg)
+        if ok:
+            messagebox.showinfo("System Restore", "Restore point created.\n\n" + msg,
+                                parent=self)
+        else:
+            messagebox.showwarning(
+                "System Restore",
+                "No restore point was created.\n\n" + msg
+                + "\n\nSweep will still clean, but this run will not be undoable.",
+                parent=self)
 
     def _shortcuts(self) -> None:
         lines = []

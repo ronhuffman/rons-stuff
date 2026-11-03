@@ -43,6 +43,9 @@ class CleanReport:
     simulated: bool = True
     mode: str = "dry-run"
     log_path: str | None = None
+    #: Outcome of the pre-clean System Restore point, in plain language.
+    #: Empty when no attempt was made (dry run, or nothing to delete).
+    restore_point: str = ""
 
     @property
     def deleted(self) -> int:
@@ -130,10 +133,16 @@ def clean(scan_result: scanner.ScanResult,
           backup_dir: str | None = None,
           passes: int = 1,
           keep_domains: list[str] | None = None,
-          backup_cookies: bool = True) -> CleanReport:
+          backup_cookies: bool = True,
+          restore_point: bool = True) -> CleanReport:
     """Delete (or simulate deleting) the scanned files.
 
     mode: "dry-run" | "delete" | "recycle"
+
+    When *restore_point* is set and anything is actually about to be deleted,
+    a System Restore point is attempted first. Its outcome is reported on
+    ``CleanReport.restore_point`` - never assumed, and never allowed to block a
+    clean that the user asked for.
     """
     simulated = mode == "dry-run" or not confirm
     report = CleanReport(simulated=simulated,
@@ -156,6 +165,19 @@ def clean(scan_result: scanner.ScanResult,
     # has no file allow-list.
     if not allow and mode != "dry-run" and any(t.count for t in targets):
         raise PermissionError("allow-list is empty; refusing to run any deletion")
+
+    # ---- undo point before anything is destroyed -----------------------
+    # Only when something will genuinely be deleted. A dry run creates nothing,
+    # and a run of pure system actions (DISM, recycle bin) has no files to undo.
+    if restore_point and not simulated and any(t.count for t in targets):
+        from . import system
+        try:
+            rp_ok, rp_msg = system.create_restore_point("Sweep: before cleaning")
+        except Exception as exc:                       # never block the clean
+            rp_ok, rp_msg = False, f"restore point failed: {exc}"
+        report.restore_point = ("created - " if rp_ok else "not created - ") + rp_msg
+        if log:
+            log.write(result="restore-point", ok=rp_ok, detail=rp_msg)
 
     total = len(targets)
     for idx, rr in enumerate(targets):

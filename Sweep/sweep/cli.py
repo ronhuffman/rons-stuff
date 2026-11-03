@@ -287,6 +287,7 @@ def cmd_clean(args) -> int:
         rep = cleaner.clean(res, confirm=True, mode=mode, log=log,
                             backup_dir=backup_dir, passes=passes,
                             keep_domains=keep_domains,
+                            restore_point=not getattr(args, "no_restore_point", False),
                             progress=None if args.quiet else progress)
     finally:
         log.close()
@@ -316,6 +317,8 @@ def cmd_clean(args) -> int:
         print(f"  denied              {rep.denied:,}  - re-run as administrator")
     if rep.failed:
         print(f"  failed              {rep.failed:,}")
+    if rep.restore_point:
+        print(f"  restore point       {rep.restore_point}")
     print(f"  mode                {mode}")
     print(f"  log                 {log_path}")
     return 0
@@ -450,6 +453,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="overwrite each file N times before deleting it")
     c.add_argument("--no-keep", action="store_true",
                    help="ignore the cookie keep-list and remove every cookie")
+    c.add_argument("--no-restore-point", action="store_true",
+                   help="skip the System Restore point normally created before cleaning")
     c.set_defaults(func=cmd_clean)
 
     a = sub.add_parser("analyze", help="show what is using space (treemap data, big files)")

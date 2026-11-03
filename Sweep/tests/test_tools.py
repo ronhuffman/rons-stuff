@@ -634,3 +634,49 @@ class TestUnreadableScheduler(unittest.TestCase):
             schedule.status = orig
         self.assertEqual(c.status, health.UNKNOWN)
         self.assertNotIn("not scheduled", c.value)
+
+
+class TestFrozenBuild(unittest.TestCase):
+    """A packaged exe must elevate by relaunching itself.
+
+    There is no interpreter and no ``-m sweep`` inside a PyInstaller build, so
+    the unfrozen relaunch path would silently do nothing. These tests pin both
+    branches without triggering a real UAC prompt.
+    """
+
+    def setUp(self):
+        import sys
+        from sweep import base, gui
+        self.sys = sys
+        self.base = base
+        self.gui = gui
+        self.captured = {}
+        self._orig = base.relaunch_elevated
+        self._had = hasattr(sys, "frozen")
+        base.relaunch_elevated = (
+            lambda params, cwd=None, exe=None:
+            (self.captured.update(params=params, cwd=cwd, exe=exe) or True))
+
+    def tearDown(self):
+        self.base.relaunch_elevated = self._orig
+        if not self._had:
+            try:
+                del self.sys.frozen
+            except AttributeError:
+                pass
+
+    def test_frozen_relaunch_uses_the_executable(self):
+        self.sys.frozen = True
+        ok = self.gui._relaunch_elevated_gui()
+        self.assertTrue(ok)
+        self.assertEqual(self.captured["params"], "--elevated")
+        self.assertNotIn("-m sweep", self.captured["params"])
+        self.assertEqual(self.captured["exe"], self.sys.executable)
+
+    def test_unfrozen_relaunch_uses_the_module_form(self):
+        if getattr(self.sys, "frozen", False):
+            self.skipTest("running from a frozen build")
+        ok = self.gui._relaunch_elevated_gui()
+        self.assertTrue(ok)
+        self.assertEqual(self.captured["params"], "-m sweep gui --elevated")
+        self.assertIn("pythonw", self.captured["exe"].lower())

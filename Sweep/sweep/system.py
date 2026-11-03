@@ -678,3 +678,100 @@ def run_action(action: str) -> str:
     if fn is None:
         return f"unsupported action {action!r}"
     return fn(arg) if arg and name in ("clear_office_mru", "clean_volumecache") else fn()
+
+
+# =========================================================================
+# System Restore
+# =========================================================================
+
+class _RESTOREPOINTINFO(ctypes.Structure):
+    _fields_ = [
+        ("dwEventType", wintypes.DWORD),
+        ("dwRestorePtType", wintypes.DWORD),
+        ("llSequenceNumber", ctypes.c_int64),
+        ("szDescription", wintypes.WCHAR * 256),
+    ]
+
+
+class _STATEMGRSTATUS(ctypes.Structure):
+    _fields_ = [
+        ("nStatus", wintypes.DWORD),
+        ("llSequenceNumber", ctypes.c_int64),
+    ]
+
+
+_BEGIN_SYSTEM_CHANGE = 100
+_MODIFY_SETTINGS = 12
+
+#: Win32 codes SRSetRestorePointW can report, in plain language.
+_RESTORE_ERRORS = {
+    5: "access denied - run as administrator",
+    1058: ("System Protection is turned off for this drive. Enable it in System "
+           "Properties > System Protection, then try again"),
+    1060: "the System Restore service is not running",
+    112: "not enough disk space to create a restore point",
+    0x8007045D: "the drive returned an I/O error",
+}
+
+
+def create_restore_point(description: str = "Sweep: before cleaning") -> tuple[bool, str]:
+    """Create a System Restore point.
+
+    Uses SRSetRestorePointW directly rather than ``Checkpoint-Computer``: the
+    PowerShell cmdlet is throttled to one restore point per 24 hours and fails
+    quietly inside that window, which would make "a restore point was made" an
+    unreliable claim.
+
+    Returns (ok, message). Never raises - the caller decides what to do.
+    """
+    if not base.IS_WINDOWS:
+        return False, "System Restore is Windows-only"
+    if not base.is_admin():
+        return False, "needs administrator - nothing was created"
+    try:
+        srclient = ctypes.WinDLL("srclient.dll", use_last_error=True)
+    except OSError as exc:
+        return False, f"System Restore API unavailable ({exc})"
+
+    info = _RESTOREPOINTINFO()
+    info.dwEventType = _BEGIN_SYSTEM_CHANGE
+    info.dwRestorePtType = _MODIFY_SETTINGS
+    info.llSequenceNumber = 0
+    info.szDescription = description[:255]
+    status = _STATEMGRSTATUS()
+
+    try:
+        ok = srclient.SRSetRestorePointW(ctypes.byref(info), ctypes.byref(status))
+    except (AttributeError, OSError) as exc:
+        return False, f"could not call System Restore ({exc})"
+
+    if ok and status.nStatus == 0:
+        # The API writes the sequence into the request struct; the status struct
+        # can report 0, which produced a misleading "sequence 0".
+        seq = int(info.llSequenceNumber or 0) or int(status.llSequenceNumber or 0)
+        if seq:
+            return True, f"restore point created (sequence {seq})"
+        return True, "restore point created"
+    reason = _RESTORE_ERRORS.get(int(status.nStatus),
+                                 f"System Restore returned code {int(status.nStatus)}")
+    return False, reason
+
+
+def restore_point_supported() -> tuple[bool, str]:
+    """Whether a restore point can be made right now, without making one."""
+    if not base.IS_WINDOWS:
+        return False, "Windows-only"
+    if not base.is_admin():
+        return False, "needs administrator"
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore") as k:
+            try:
+                disabled = winreg.QueryValueEx(k, "DisableSR")[0]
+            except OSError:
+                disabled = 0
+            if disabled:
+                return False, "System Protection is turned off"
+        return True, "available"
+    except OSError:
+        return True, "available (service state unknown)"

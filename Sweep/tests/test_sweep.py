@@ -85,6 +85,64 @@ class TestScanAndClean(unittest.TestCase):
         for p in self.sb.junk:
             self.assertFalse(os.path.exists(p))
 
+    def test_restore_point_is_skipped_on_a_dry_run(self):
+        res = scanner.scan([self.TEST_RULE])
+        called = []
+        orig = system.create_restore_point
+        system.create_restore_point = lambda *a, **k: (called.append(1) or (True, "stub"))
+        try:
+            rep = cleaner.clean(res, confirm=True, mode="dry-run")
+        finally:
+            system.create_restore_point = orig
+        self.assertEqual(called, [], "a dry run must not create a restore point")
+        self.assertEqual(rep.restore_point, "")
+
+    def test_restore_point_failure_is_reported_and_does_not_block(self):
+        res = scanner.scan([self.TEST_RULE])
+        orig = system.create_restore_point
+        system.create_restore_point = lambda *a, **k: (False, "System Protection is off")
+        try:
+            rep = cleaner.clean(res, confirm=True, mode="delete")
+        finally:
+            system.create_restore_point = orig
+        self.assertIn("not created", rep.restore_point)
+        self.assertIn("System Protection is off", rep.restore_point)
+        self.assertEqual(rep.deleted, 5,
+                         "a missing undo point must not block a requested clean")
+
+    def test_restore_point_success_is_reported(self):
+        res = scanner.scan([self.TEST_RULE])
+        orig = system.create_restore_point
+        system.create_restore_point = lambda *a, **k: (True, "sequence 42")
+        try:
+            rep = cleaner.clean(res, confirm=True, mode="delete")
+        finally:
+            system.create_restore_point = orig
+        self.assertIn("created", rep.restore_point)
+        self.assertIn("sequence 42", rep.restore_point)
+
+    def test_restore_point_can_be_disabled(self):
+        res = scanner.scan([self.TEST_RULE])
+        called = []
+        orig = system.create_restore_point
+        system.create_restore_point = lambda *a, **k: (called.append(1) or (True, "stub"))
+        try:
+            rep = cleaner.clean(res, confirm=True, mode="delete", restore_point=False)
+        finally:
+            system.create_restore_point = orig
+        self.assertEqual(called, [], "--no-restore-point must skip the attempt")
+        self.assertEqual(rep.restore_point, "")
+
+    def test_restore_point_answers_instead_of_raising(self):
+        """It must always return (bool, reason), never raise, when it cannot run."""
+        supported_ok, supported_msg = system.restore_point_supported()
+        self.assertIsInstance(supported_ok, bool)
+        self.assertIsInstance(supported_msg, str)
+        if not base.is_admin():
+            ok, msg = system.create_restore_point("sweep test")
+            self.assertFalse(ok)
+            self.assertIn("administrator", msg.lower())
+
     def test_dry_run_deletes_nothing(self):
         res = scanner.scan([self.TEST_RULE])
         rep = cleaner.clean(res, confirm=True, mode="dry-run")
@@ -281,8 +339,13 @@ class TestSessionLog(unittest.TestCase):
             log.close()
             with open(logfile, encoding="utf-8") as fh:
                 lines = [ln for ln in fh if ln.strip()]
-            self.assertEqual(len(lines), 5)
-            self.assertIn('"result": "deleted"', lines[0])
+            # The log carries one pre-run record (the undo point) plus one
+            # record per file attempt. Count the attempts, not the lines.
+            records = [ln for ln in lines if '"result": "restore-point"' not in ln]
+            self.assertEqual(len(records), 5, "one record per file attempt")
+            self.assertIn('"result": "deleted"', records[0])
+            self.assertTrue(any('"result": "restore-point"' in ln for ln in lines),
+                            "the restore-point outcome must be recorded too")
         finally:
             rules.RULES[:] = [r for r in rules.RULES if r["id"] != "test.log"]
             sb.cleanup()
