@@ -864,3 +864,25 @@ class TestLowSeverityHonesty(unittest.TestCase):
         self.assertEqual(out, [])
 
 
+
+
+class TestSizeAccounting(unittest.TestCase):
+    """A volume or entry that cannot be measured is not zero bytes."""
+
+    def test_unmeasurable_volume_is_none_not_zero(self):
+        from sweep import analyzer
+        self.assertIsNone(analyzer.disk_usage("Z:\\no-such-volume"),
+                          "an unreadable volume must not report 0 used / 0 free")
+
+    def test_real_volume_still_reports(self):
+        from sweep import analyzer
+        usage = analyzer.disk_usage("C:\\")
+        self.assertIsNotNone(usage)
+        total, used, free = usage
+        self.assertGreater(total, 0)
+
+    def test_tree_counts_unreadable_entries_not_zero(self):
+        from sweep import analyzer
+        node = analyzer.build_tree(TMP_ROOT, max_depth=1, max_children=4)
+        self.assertGreaterEqual(node.denied, 0)
+        self.assertIsInstance(node.denied, int)

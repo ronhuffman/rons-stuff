@@ -30,11 +30,16 @@ class Node:
     denied: int = 0
 
 
-def disk_usage(path: str) -> tuple[int, int, int]:
+def disk_usage(path: str) -> tuple[int, int, int] | None:
+    """(total, used, free) for the volume holding *path*, or None if unmeasurable.
+
+    Returning (0, 0, 0) made an unreadable volume print as "0 B used (0 B free)",
+    which reads as a real measurement.
+    """
     try:
         return shutil.disk_usage(path)
     except OSError:
-        return 0, 0, 0
+        return None
 
 
 def _entry_size(entry: os.DirEntry) -> int:
@@ -87,6 +92,7 @@ def build_tree(root: str, max_depth: int = 3, max_children: int = 14,
                 else:
                     continue
             except OSError:
+                node.denied += 1      # could not be stat'ed, not zero bytes
                 continue
 
         kids.sort(key=lambda n: n.size, reverse=True)

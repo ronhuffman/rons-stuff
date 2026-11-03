@@ -344,10 +344,14 @@ def cmd_analyze(args) -> int:
     if not os.path.isdir(root):
         print(f"not a directory: {root}", file=sys.stderr)
         return 2
-    total, used, free = analyzer.disk_usage(root)
+    usage = analyzer.disk_usage(root)
     print(banner(base.is_admin()))
-    print(f"  volume   {total - free:,} used / {base.human(total)}  "
-          f"({base.human(free)} free)\n")
+    if usage is None:
+        print("  volume   could not measure this volume\n")
+    else:
+        total, used, free = usage
+        print(f"  volume   {total - free:,} used / {base.human(total)}  "
+              f"({base.human(free)} free)\n")
 
     if args.duplicates:
         print("  scanning for duplicates (this reads file contents)...")
