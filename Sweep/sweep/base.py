@@ -205,6 +205,7 @@ def walk(
     min_age_hours: float = 0.0,
     skip_dirs: set[str] | None = None,
     now: float | None = None,
+    errors: list[str] | None = None,
 ):
     """Yield (path, size) for regular files under *root* matching *pattern*.
 
@@ -214,6 +215,9 @@ def walk(
     - ``min_age_hours`` skips files modified more recently than the cut-off,
       which is how we avoid pulling a temp file out from under a running
       installer.
+    - pass *errors* to collect the directories it could not read. Without it,
+      a walk that skipped a protected directory looks identical to one that
+      found nothing there.
     """
     import time
 
@@ -227,7 +231,10 @@ def walk(
         n = name.lower()
         return any(fnmatch.fnmatchcase(n, p) for p in pats)
 
-    def onerror(_e):
+    def onerror(e):
+        if errors is not None:
+            errors.append(f"{getattr(e, 'filename', None) or '?'}: "
+                          f"{getattr(e, 'strerror', None) or e}")
         return
 
     if not recurse:
@@ -250,7 +257,9 @@ def walk(
                     if cutoff is not None and st.st_mtime > cutoff:
                         continue
                     yield de.path, st.st_size
-        except (OSError, ValueError):
+        except (OSError, ValueError) as exc:
+            if errors is not None:
+                errors.append(f"{root}: {exc}")
             return
         return
 

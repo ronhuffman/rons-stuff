@@ -886,3 +886,30 @@ class TestSizeAccounting(unittest.TestCase):
         node = analyzer.build_tree(TMP_ROOT, max_depth=1, max_children=4)
         self.assertGreaterEqual(node.denied, 0)
         self.assertIsInstance(node.denied, int)
+
+
+class TestWalkCoverage(unittest.TestCase):
+    """walk() must be able to say which directories it could not read."""
+
+    def test_readable_tree_reports_no_errors(self):
+        d = fresh_dir("walk-ok")
+        with open(os.path.join(d, "a.txt"), "wb") as fh:
+            fh.write(b"x" * 10)
+        errors: list[str] = []
+        got = list(base.walk(d, "*", recurse=True, errors=errors))
+        self.assertEqual(len(got), 1)
+        self.assertEqual(errors, [])
+
+    def test_walk_still_works_without_the_errors_argument(self):
+        d = fresh_dir("walk-plain")
+        with open(os.path.join(d, "b.txt"), "wb") as fh:
+            fh.write(b"y" * 10)
+        got = list(base.walk(d, "*", recurse=True))
+        self.assertEqual(len(got), 1)
+
+    def test_missing_root_is_reported(self):
+        errors: list[str] = []
+        got = list(base.walk(os.path.join(TMP_ROOT, "no-such-dir-xyz"), "*",
+                             recurse=False, errors=errors))
+        self.assertEqual(got, [])
+        self.assertTrue(errors, "an unreadable root must be reported, not silent")

@@ -409,41 +409,51 @@ Being precise about this, because it matters:
 
 ## What is verified, and what is not
 
-Being precise about this, because it matters:
+Being precise about this, because it matters.
 
-**Verified by the test suite (120 tests).** Allow-list enforcement, junction
+**Verified by the test suite (162 tests).** Allow-list enforcement, junction
 avoidance, dry-run safety, caution-never-default, rule-variable expansion, the
 dangerous-target validator, registry backup → remove → restore with type
 preservation, cookie filtering for both browser layouts, secure erase, winget
 output parsing, driver inventory, the scheduler's launcher and weekday logic,
-health scoring bands, crash-incident grouping (so one shutdown is not counted three
-times), the checkbox selection model, parallel-vs-serial scan equivalence, and that
-every Tools panel actually puts its content on screen (a panel that builds a
-widget but never packs it renders as an empty tab).
+health scoring bands, crash-incident grouping (so one shutdown is not counted
+three times), the checkbox selection model, parallel-vs-serial scan equivalence,
+restore-point behaviour (dry run never creates one, failure never blocks a
+requested clean), frozen-build elevation, and the honesty rules below — that a
+denied or unreadable source reports UNKNOWN rather than a confident zero.
 
-**Verified manually on this machine.** 761/768 category import; 12.1 GB /
-78,892 files scanned across 809 rules; full application inventory with sizes;
-416 kernel drivers via the registry fallback; a live health report that
-correctly surfaced 2 unexpected shutdowns, a queued reboot, and a 20-day uptime.
+**Verified end to end, elevated, on a real Windows 11 machine.** Recorded by
+`tools/verify-elevated.ps1`; the transcript is kept locally and deliberately
+gitignored because it contains machine details.
 
-**Not verified here.** Scheduling, winget, and every Windows Update path
-(`sweep update`, `sweep windows-update`, `sweep drivers --check/--install`) were
-blocked by the confinement this was built under: Task Scheduler COM and
-`schtasks` both refused, `winget` is a 0-byte App Execution Alias returning
-`0x8A150001`, and Windows Update `Search()` returns *Access denied* to a
-standard user.
+| Path | What happened |
+| --- | --- |
+| Task Scheduler | created `Sweep - Automatic Clean`; `--status` reported installed, enabled, next run; removed cleanly |
+| Secure erase | 3 real files overwritten and deleted; 0 remained; SSD caveat printed |
+| Windows Update search | enumerated successfully (nothing pending) — this returns *Access denied* unelevated |
+| Driver inventory | `driverquery` works elevated: real display names, Running/Stopped state (unelevated it falls back to the registry) |
+| Driver updates | Windows Update queried; no driver updates offered for this machine |
+| winget | 2 upgrades found with versions; previously failed with `0x8A150001` |
+| Unified preview | correct without `--apply`; nothing changed |
+| System Restore | restore point created (sequence 313) and confirmed independently with `Get-ComputerRestorePoint` |
+| Health | Defender real-time state readable elevated (it reports `unknown` unelevated) |
 
-They are implemented with explicit, specific error paths — the winget failure
-names the HRESULT, the Windows Update failure names elevation as the fix — but
-their happy path has not been exercised. Run each once yourself:
+Elevation roughly doubles what the scan can measure: 3.8 GB unelevated versus
+**8.2 GB across 45,181 files** elevated, because Delivery Optimization and the
+Windows temp store only become readable with administrator rights. The CLI now
+prints how many paths were unreadable rather than quietly omitting them.
 
-```
-sweep update --elevate
-sweep windows-update
-sweep schedule --status
-```
+**Not verified.** The *install* half of the update paths — `sweep update --apply`,
+`sweep windows-update --install`, `sweep drivers --install` — has not been
+exercised against a real pending update. Enumeration, matching and the
+"nothing is offered" branch are verified; the actual install call is not. Treat
+the first install you run as the test, and if it misbehaves, the exact error is
+what a fix needs.
 
-If any misbehaves, the exact error is what I need to fix it against.
+**Known limits.** Pending updates on this machine happened to be empty, so
+"found and installed an update" has never run. The `winget` alias resolves
+differently on some builds. Scheduled cleaning has been created and removed here
+but has not yet fired on its own.
 
 ---
 

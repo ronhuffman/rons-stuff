@@ -2748,9 +2748,22 @@ class SecurePanel(_ToolPanel):
             messagebox.showerror("Sweep", f"Not found:\n{p}", parent=self)
             return
         passes = int((self.passes.get() or "1").split()[0])
-        files = [p] if os.path.isfile(p) else [f for f, _ in base.walk(p, "*", recurse=True)]
+        walk_errors: list[str] = []
+        files = ([p] if os.path.isfile(p)
+                 else [f for f, _ in base.walk(p, "*", recurse=True, errors=walk_errors)])
         if not files:
-            self.set_status("nothing to wipe")
+            if walk_errors:
+                # "nothing to wipe" would be a lie when the folder was unreadable.
+                messagebox.showwarning(
+                    "Secure erase",
+                    "Nothing could be read in that folder, so there is nothing to "
+                    "wipe and nothing to confirm.\n\n"
+                    + "\n".join(walk_errors[:3])
+                    + "\n\nRestart as administrator to wipe protected files.",
+                    parent=self)
+                self.set_status("nothing readable to wipe")
+            else:
+                self.set_status("nothing to wipe")
             return
         total = sum(os.path.getsize(f) for f in files if os.path.exists(f))
         if not messagebox.askyesno(
