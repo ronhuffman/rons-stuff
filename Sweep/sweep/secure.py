@@ -21,6 +21,7 @@ import ctypes
 import os
 import shutil
 import sys
+import tempfile
 from dataclasses import dataclass
 
 from . import base
@@ -106,12 +107,15 @@ def wipe_free_space(root: str, max_bytes: int | None = None,
 
     written = files = 0
     stop_reason = ""
-    folder = os.path.join(root, ".sweep-wipe")
+    # A brand-new folder with a unique name, created by this run. Reusing a
+    # fixed name would mean writing into - and then emptying - a folder that
+    # might already hold someone's files, or be a link to somewhere else.
     try:
-        os.makedirs(folder, exist_ok=True)
+        folder = tempfile.mkdtemp(prefix=".sweep-wipe-", dir=root)
     except OSError as exc:
-        return 0, 0, f"cannot create {folder}: {exc}"
+        return 0, 0, f"cannot create a wipe folder in {root}: {exc}"
 
+    created: list[str] = []           # only these files are ever deleted
     try:
         while written < budget:
             if cancel is not None and cancel.is_set():
@@ -119,7 +123,13 @@ def wipe_free_space(root: str, max_bytes: int | None = None,
             size = min(64 << 20, budget - written)
             path = os.path.join(folder, f"wipe-{files:06d}.bin")
             try:
-                with open(path, "wb", buffering=0) as fh:
+                fh = open(path, "xb", buffering=0)     # never reuse a file
+            except OSError as exc:
+                stop_reason = f"stopped after {files} file(s): {exc.strerror or exc}"
+                break
+            created.append(path)
+            try:
+                with fh:
                     remaining = size
                     while remaining > 0:
                         n = min(CHUNK, remaining)
@@ -135,21 +145,23 @@ def wipe_free_space(root: str, max_bytes: int | None = None,
             if progress:
                 progress(written, budget)
     finally:
-        removed = 0
+        left = []
+        for path in created:
+            try:
+                os.unlink(path)
+            except OSError:
+                left.append(path)
         try:
-            for entry in os.scandir(folder):
-                try:
-                    os.unlink(entry.path)
-                    removed += 1
-                except OSError:
-                    pass
-            os.rmdir(folder)
+            os.rmdir(folder)                 # only succeeds when empty
         except OSError:
             pass
     note = (f"overwrote {files} file(s), {base.human(written)}; "
-            f"removed {removed}")
+            f"removed {len(created) - len(left)} of {len(created)}")
     if stop_reason:
         note += f" - {stop_reason}; free space was NOT fully wiped"
+    if left:
+        note += (f" - {len(left)} wipe file(s) could not be removed from {folder}; "
+                 "delete them to get the space back")
     return written, files, note
 
 

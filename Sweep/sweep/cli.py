@@ -290,12 +290,16 @@ def cmd_clean(args) -> int:
     else:
         mode = "recycle" if args.recycle else "delete"
     passes = max(1, args.secure or 1)
-    keep_domains: list[str] = []
-    if not getattr(args, "no_keep", False):
+    # None = the saved keep-list, which the cleaner loads itself and refuses to
+    # treat as empty when it exists but cannot be read. --no-keep is explicit.
+    keep_domains: list[str] | None = [] if getattr(args, "no_keep", False) else None
+    if keep_domains is None:
         from . import keep as keepmod
-        keep_domains = keepmod.KeepList.load().domains
-        if keep_domains:
-            print(f"  keep-list active: {len(keep_domains)} domain(s) preserved")
+        kl = keepmod.KeepList.load()
+        if kl.load_error:
+            print(f"  keep-list unreadable ({kl.load_error}): cookies will be left alone")
+        elif kl.domains:
+            print(f"  keep-list active: {len(kl.domains)} domain(s) preserved")
     backup_dir = args.backup_dir or os.path.join(os.path.dirname(log_path), "registry-backups")
     log = cleaner.SessionLog(log_path)
     try:

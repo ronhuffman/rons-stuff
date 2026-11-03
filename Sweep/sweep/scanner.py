@@ -82,8 +82,13 @@ def _escape_segments(template: str) -> str:
     return "\\".join(out)
 
 
-def expand_targets(template: str) -> list[str]:
-    """Expand %VARS% and wildcard directory segments into concrete paths."""
+def expand_targets(template: str, refused: list[str] | None = None) -> list[str]:
+    """Expand %VARS% and wildcard directory segments into concrete paths.
+
+    A folder that is, or sits beneath, a symlink, junction or mount point is
+    dropped (and listed in *refused*): the walk never follows links inside a
+    root, and the root itself must not be one either.
+    """
     p = base.expand(template)
     if not p:
         return []
@@ -94,8 +99,17 @@ def expand_targets(template: str) -> list[str]:
             found = glob.glob(_escape_segments(p))
         except (OSError, re.error):
             return []
-        return sorted({f for f in found if os.path.isdir(f)})
-    return [p] if os.path.isdir(p) else []
+        roots = sorted({f for f in found if os.path.isdir(f)})
+    else:
+        roots = [p] if os.path.isdir(p) else []
+    safe = []
+    for r in roots:
+        if base.through_link(r):
+            if refused is not None:
+                refused.append(r)
+            continue
+        safe.append(r)
+    return safe
 
 
 # --------------------------------------------------------------------------
@@ -200,7 +214,12 @@ def _scan_rule(rule: dict, cancel: "base.Cancel | None", now: float,
 
     try:
         for ent in rule.get("files", []):
-            expanded = expand_targets(ent["path"])
+            refused: list[str] = []
+            expanded = expand_targets(ent["path"], refused)
+            if refused:
+                # Present, but reached through a link: report, never clean.
+                stats["skipped"] += len(refused)
+                targets_present += len(refused)
             if not expanded:
                 continue
             targets_present += len(expanded)

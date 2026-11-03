@@ -140,11 +140,25 @@ TASK_ERROR: str | None = None
 
 
 def _load_quarantine() -> list[dict]:
+    """Quarantined registry entries, for display. Unreadable reads as empty;
+    anything that writes the store must use :func:`_read_quarantine`."""
+    recs, _err = _read_quarantine()
+    return recs
+
+
+def _read_quarantine() -> tuple[list[dict], str]:
+    """(records, error). A store that exists but cannot be read must not be
+    saved over: it holds the only copy of every entry disabled so far."""
     try:
         with open(QUARANTINE_DB, encoding="utf-8") as fh:
-            return json.load(fh)
-    except (OSError, ValueError):
-        return []
+            recs = json.load(fh)
+    except FileNotFoundError:
+        return [], ""
+    except (OSError, ValueError) as exc:
+        return [], str(exc)
+    if not isinstance(recs, list):
+        return [], "unexpected format"
+    return recs, ""
 
 
 def _save_quarantine(items: list[dict]) -> None:
@@ -296,25 +310,36 @@ def _list_services() -> list[StartupItem]:
 
 def disable_startup(item: StartupItem) -> str:
     if item.kind == "registry":
+        recs, err = _read_quarantine()
+        if err:
+            return f"failed: Sweep's record of disabled entries is unreadable ({err}); nothing changed"
         try:
-            with winreg.OpenKey(_HIVES[item.hive], item.key, 0, winreg.KEY_READ | winreg.KEY_WRITE) as key:
-                name, val, typ = None, None, winreg.REG_SZ
-                i = 0
-                while True:
-                    n, v, t = winreg.EnumValue(key, i)
-                    if n == item.value:
-                        name, val, typ = n, v, t
-                        break
-                    i += 1
-            if name is None:
-                return "entry no longer present"
-            winreg.DeleteValue(key, item.value)
+            with winreg.OpenKey(_HIVES[item.hive], item.key, 0,
+                                winreg.KEY_READ | winreg.KEY_WRITE) as key:
+                try:
+                    val, typ = winreg.QueryValueEx(key, item.value)
+                except FileNotFoundError:
+                    return "entry no longer present"
+                # Record the entry before removing it: if the record cannot be
+                # saved, the entry stays where it is.
+                rec = {"hive": item.hive, "key": item.key, "name": item.value,
+                       "command": val, "type": int(typ)}
+                recs.append(rec)
+                try:
+                    _save_quarantine(recs)
+                except (OSError, TypeError, ValueError) as exc:
+                    return f"failed: could not record the entry ({exc}); nothing changed"
+                try:
+                    winreg.DeleteValue(key, item.value)
+                except OSError as exc:
+                    recs.remove(rec)
+                    try:
+                        _save_quarantine(recs)
+                    except OSError:
+                        pass
+                    return f"failed: {exc}"
         except OSError as exc:
             return f"failed: {exc}"
-        recs = _load_quarantine()
-        recs.append({"hive": item.hive, "key": item.key, "name": item.value,
-                     "command": str(val), "type": int(typ)})
-        _save_quarantine(recs)
         return "disabled (moved to Sweep quarantine)"
 
     if item.kind == "folder":
@@ -322,6 +347,9 @@ def disable_startup(item: StartupItem) -> str:
             return "already disabled"
         os.makedirs(QUARANTINE_DIR, exist_ok=True)
         dest = os.path.join(QUARANTINE_DIR, item.name)
+        if os.path.lexists(dest):
+            # Never overwrite an item that is already in quarantine.
+            return f"failed: {item.name} is already in Sweep's quarantine"
         try:
             import shutil
             shutil.move(item.path, dest)
@@ -342,7 +370,9 @@ def disable_startup(item: StartupItem) -> str:
 
 def enable_startup(item: StartupItem) -> str:
     if item.kind == "registry":
-        recs = _load_quarantine()
+        recs, err = _read_quarantine()
+        if err:
+            return f"failed: Sweep's record of disabled entries is unreadable ({err})"
         match = [r for r in recs if r.get("hive") == item.hive
                  and r.get("key") == item.key and r.get("name") == item.value]
         if not match:

@@ -50,11 +50,13 @@ contract that the test suite enforces:
 |---|---|
 | Nothing is deleted without an explicit act | `clean` is a dry run unless `--apply`; the GUI requires a confirmation dialog |
 | Only previewed files can be deleted | The scanner produces an allow-list of exact paths; the cleaner refuses any path not in it (`test_path_outside_allowlist_is_refused`) |
-| Junctions and symlinks are never followed | A directory junction inside a cache cannot widen a rule into `System32` (`test_junction_is_not_followed`) |
+| Junctions and symlinks are never followed | A directory junction inside a cache - or a cache folder that is itself a junction, or sits beneath one - cannot widen a rule into `System32` (`test_junction_is_not_followed`, `test_link_itself_is_refused`) |
 | User data is never matched | No rule targets a profile root; a test asserts this (`test_no_rule_targets_whole_profile`) |
 | Risky actions are never implicit | Anything `caution`-level is off by default and asserted so (`test_caution_is_never_default`) |
 | In-use files are skipped, not forced | Locked files are counted and reported; the run continues |
 | Every deletion is recorded | Append-only JSONL audit log in `%LOCALAPPDATA%\Sweep\logs\` |
+| Registry removals can be undone | Every removed value or key is backed up first - whole key trees included - from the GUI and the command line alike; if the backup fails nothing is removed (`test_subkey_backup_restores_the_whole_tree_with_types`) |
+| Kept cookies survive every clean | The saved keep-list applies to the GUI, the command line and scheduled runs; a list that cannot be read leaves cookies alone (`test_unreadable_keep_list_leaves_cookies_alone`) |
 | Deletion can be recoverable | "Send to Recycle Bin" toggle in the GUI, `--recycle` in the CLI |
 
 A hardened name list (`pagefile.sys`, `ntuser.dat`, registry hives, …) is refused

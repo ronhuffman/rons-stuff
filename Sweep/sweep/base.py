@@ -198,6 +198,45 @@ def is_reparse(path: str) -> bool:
     return False
 
 
+#: Reparse tags with the "name surrogate" bit point at another location:
+#: junctions, symbolic links and volume mount points. Other reparse points -
+#: OneDrive placeholders, deduplicated files - are the item itself.
+_NAME_SURROGATE = 0x20000000
+
+
+def is_link(path: str) -> bool:
+    """True when *path* itself redirects elsewhere: a symlink, junction or
+    mount point."""
+    try:
+        st = os.lstat(path)
+    except (OSError, ValueError):
+        return False
+    if stat.S_ISLNK(st.st_mode):
+        return True
+    if IS_WINDOWS:
+        FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+        if getattr(st, "st_file_attributes", 0) & FILE_ATTRIBUTE_REPARSE_POINT:
+            return bool(getattr(st, "st_reparse_tag", 0) & _NAME_SURROGATE)
+    return False
+
+
+def through_link(path: str) -> str:
+    """The first folder on the way to *path* (the path itself included) that
+    is a symlink, junction or mount point, or "" if there is none.
+
+    A cleaning root that is - or sits beneath - such a link can point
+    anywhere, so files reached through it must never be offered for deletion.
+    """
+    full = os.path.abspath(path)
+    drive, rest = os.path.splitdrive(full)
+    cur = drive + os.sep if drive else os.sep
+    for seg in [s for s in rest.replace("/", os.sep).split(os.sep) if s]:
+        cur = os.path.join(cur, seg)
+        if is_link(cur):
+            return cur
+    return ""
+
+
 def walk(
     root: str,
     pattern: str = "*",

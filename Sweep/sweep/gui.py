@@ -1587,6 +1587,18 @@ class CleanTab(ttk.Frame):
         if caution:
             msg.append("\n\nIncludes caution-level rules:\n  " +
                        "\n  ".join(c.name for c in caution))
+        if any(r.handler == "cookie_dbs" for r in plan):
+            from . import keep as keepmod
+            kl = keepmod.KeepList.load()
+            if kl.load_error:
+                msg.append("\n\nThe cookie keep-list could not be read, so cookies "
+                           "will be left alone this time.")
+            elif kl.domains:
+                msg.append(f"\n\nCookies for {len(kl.domains)} kept site(s) are "
+                           "preserved (Tools \u203a Cookie keep-list).")
+        if any(r.reg_items for r in plan):
+            msg.append("\n\nRegistry entries are backed up first, to\n"
+                       "%LOCALAPPDATA%\\Sweep\\logs\\registry-backups\\")
         if self.app.recycle_var.get():
             msg.append("\n\nFiles go to the Recycle Bin, so this can be undone.")
         else:
@@ -1610,8 +1622,14 @@ class CleanTab(ttk.Frame):
 
         def job(cancel, emit):
             try:
+                # The same safeguards as the command line: registry backups
+                # next to the audit log, and the saved cookie keep-list
+                # (keep_domains=None loads it, and refuses if it is unreadable).
                 return cleaner.clean(res, rule_ids=ids, confirm=True, mode=mode,
                                      log=log, cancel=cancel,
+                                     backup_dir=os.path.join(os.path.dirname(log_path),
+                                                             "registry-backups"),
+                                     keep_domains=None,
                                      progress=lambda d, t, lbl, b: emit(d, t, lbl, b))
             finally:
                 log.close()

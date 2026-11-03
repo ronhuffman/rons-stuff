@@ -123,6 +123,25 @@ def _is_denied(exc: OSError) -> bool:
     return exc.errno in (13,)          # EACCES
 
 
+def default_backup_dir() -> str:
+    """Where registry backups go when the caller does not choose a folder."""
+    return os.path.join(base.state_dir(), "logs", "registry-backups")
+
+
+def _resolve_keep(keep_domains: list[str] | None) -> tuple[list[str], str]:
+    """The cookie keep-list to honour, and why it could not be read ("" if ok).
+
+    ``None`` means "use the saved keep-list" - the safe default, so a caller
+    that forgets to pass it (the GUI once did) still protects kept sites. An
+    explicit list, even an empty one, is used as given.
+    """
+    if keep_domains is not None:
+        return list(keep_domains), ""
+    from . import keep as keepmod
+    kl = keepmod.KeepList.load()
+    return kl.domains, kl.load_error
+
+
 def restore_point_note(ok: bool, msg: str) -> str:
     """The one-line restore-point outcome for a clean report.
 
@@ -157,6 +176,11 @@ def clean(scan_result: scanner.ScanResult,
     a System Restore point is attempted first. Its outcome is reported on
     ``CleanReport.restore_point`` - never assumed, and never allowed to block a
     clean that the user asked for.
+
+    Two protections do not depend on the caller remembering them: registry
+    entries are always backed up before removal (to *backup_dir*, or
+    :func:`default_backup_dir`), and cookie stores honour the saved keep-list
+    unless *keep_domains* is passed explicitly.
     """
     simulated = mode == "dry-run" or not confirm
     report = CleanReport(simulated=simulated,
@@ -179,6 +203,12 @@ def clean(scan_result: scanner.ScanResult,
     # has no file allow-list.
     if not allow and mode != "dry-run" and any(t.count for t in targets):
         raise PermissionError("allow-list is empty; refusing to run any deletion")
+
+    keep_error = ""
+    if any(t.handler == "cookie_dbs" for t in targets):
+        keep_domains, keep_error = _resolve_keep(keep_domains)
+    if backup_dir is None:
+        backup_dir = default_backup_dir()
 
     # ---- undo point before anything is destroyed -----------------------
     # Only when something will genuinely be deleted. A dry run creates nothing,
@@ -225,21 +255,21 @@ def clean(scan_result: scanner.ScanResult,
                               count=len(rr.reg_items))
             else:
                 from . import registry as regmod
-                backup_path = None
-                if backup_dir:
-                    stamp = time.strftime("%Y%m%d-%H%M%S")
-                    backup_path = os.path.join(
-                        backup_dir, f"registry-{rr.rule_id.replace('.', '-')}-{stamp}.json")
-                    try:
-                        regmod.backup(rr.reg_items, backup_path)
-                    except OSError:
-                        backup_path = None
-                        # No backup, no deletion. Registry edits are the one
-                        # thing that must never be irreversible.
-                        out.failed += len(rr.reg_items)
-                        out.errors.append(f"{rr.rule_id}: backup failed, skipped")
-                        report.outcomes.append(out)
-                        continue
+                stamp = time.strftime("%Y%m%d-%H%M%S")
+                backup_path = os.path.join(
+                    backup_dir, f"registry-{rr.rule_id.replace('.', '-')}-{stamp}.json")
+                try:
+                    regmod.backup(rr.reg_items, backup_path)
+                except (OSError, ValueError, TypeError) as exc:
+                    # No backup, no deletion. Registry edits are the one
+                    # thing that must never be irreversible.
+                    out.failed += len(rr.reg_items)
+                    out.errors.append(f"{rr.rule_id}: backup failed ({exc}), skipped")
+                    if log:
+                        log.write(rule=rr.rule_id, result="registry-skipped",
+                                  error=f"backup failed: {exc}")
+                    report.outcomes.append(out)
+                    continue
                 ok, bad = regmod.remove(rr.reg_items)
                 out.deleted += ok
                 out.registry += ok
@@ -250,6 +280,18 @@ def clean(scan_result: scanner.ScanResult,
 
         # ---- file deletion -------------------------------------------
         to_recycle: list[tuple[str, int]] = []
+
+        # A keep-list that exists but cannot be read must not be treated as
+        # "keep nothing": deleting the stores would destroy the cookies it
+        # protects. Leave them alone and say why.
+        if rr.handler == "cookie_dbs" and keep_error and rr.files:
+            out.failed += len(rr.files)
+            out.errors.append(f"cookie keep-list unreadable ({keep_error}); "
+                              "cookies left alone")
+            if log:
+                log.write(rule=rr.rule_id, result="cookies-skipped", error=keep_error)
+            report.outcomes.append(out)
+            continue
 
         # A rule may nominate a handler instead of a plain unlink. The cookie
         # handler rewrites the SQLite store so kept domains survive.

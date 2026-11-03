@@ -58,20 +58,74 @@ class RegEntry:
         return base
 
     def backup_record(self) -> dict:
+        """What is needed to put this entry back. A subkey is recorded with
+        everything under it - removal deletes the whole tree, so a backup of
+        just the key name would restore an empty shell."""
         rec = {"hive": self.hive, "key": self.key, "kind": self.kind,
                "value": self.value, "reason": self.reason}
         if self.kind == "value":
-            rec["type"] = self._type
-            rec["type_name"] = _TYPE_NAMES.get(self._type, str(self._type))
-            data = self._data
-            if isinstance(data, bytes):
-                rec["data"] = data.hex()
-                rec["data_encoding"] = "hex"
-            elif isinstance(data, list):
-                rec["data"] = [str(x) for x in data]
-            else:
-                rec["data"] = data if not isinstance(data, str) else str(data)
+            rec.update(_encode_value(self._type, self._data))
+        else:
+            rec["tree"] = _read_tree(HIVES[self.hive], self.key)
         return rec
+
+
+def _encode_value(typ, data) -> dict:
+    rec = {"type": typ, "type_name": _TYPE_NAMES.get(typ, str(typ))}
+    if isinstance(data, bytes):
+        rec["data"] = data.hex()
+        rec["data_encoding"] = "hex"
+    elif isinstance(data, list):
+        rec["data"] = [str(x) for x in data]
+    else:
+        rec["data"] = data
+    return rec
+
+
+def _decode_value(rec: dict):
+    typ = rec.get("type")
+    if typ is None:
+        typ = winreg.REG_SZ
+    data = rec.get("data")
+    if rec.get("data_encoding") == "hex" and isinstance(data, str):
+        data = bytes.fromhex(data)
+    return typ, data
+
+
+def _read_tree(root, path: str, depth: int = 0) -> dict:
+    """Every value and subkey under *path*. Raises OSError if any part cannot
+    be read: an incomplete backup must stop the deletion, not excuse it."""
+    if depth > 64:
+        raise OSError(f"registry tree too deep to back up: {path}")
+    with winreg.OpenKey(root, path, 0, KEY_READ) as h:
+        values = []
+        i = 0
+        while True:
+            try:
+                name, data, typ = winreg.EnumValue(h, i)
+            except OSError:
+                break
+            values.append(dict(name=name, **_encode_value(typ, data)))
+            i += 1
+        names = []
+        i = 0
+        while True:
+            try:
+                names.append(winreg.EnumKey(h, i))
+            except OSError:
+                break
+            i += 1
+    return {"values": values,
+            "subkeys": {n: _read_tree(root, f"{path}\\{n}", depth + 1) for n in names}}
+
+
+def _write_tree(root, path: str, tree: dict) -> None:
+    with winreg.CreateKeyEx(root, path, 0, KEY_WRITE) as h:
+        for v in tree.get("values", []):
+            typ, data = _decode_value(v)
+            winreg.SetValueEx(h, v.get("name") or "", 0, typ, data)
+    for name, sub in (tree.get("subkeys") or {}).items():
+        _write_tree(root, f"{path}\\{name}", sub)
 
 
 # --------------------------------------------------------------------------
@@ -104,11 +158,17 @@ def _enum_values(hive: str, key: str):
 
 
 def _exists(path: str) -> bool:
+    """False only when *path* is provably missing. Anything that cannot be
+    resolved - an unexpanded variable, or a bare name such as ``MsiExec.exe``
+    that Windows finds on its search path - counts as present, because a
+    relative lookup from Sweep's own folder proves nothing."""
     if not path:
         return False
     p = os.path.expandvars(path.strip().strip('"'))
     if not p or "%" in p:
         return True                     # cannot resolve -> do not judge it dead
+    if not os.path.isabs(p):
+        return True
     try:
         return os.path.exists(p)
     except (OSError, ValueError):
@@ -145,12 +205,27 @@ def _scan_muicache() -> list[RegEntry]:
     for name, data, typ in _enum_values("HKCU", key):
         if not name or not isinstance(data, str):
             continue
-        if _exists(name):
+        if _exists(_muicache_target(name)):
             continue
         out.append(RegEntry("HKCU", key, "value", name,
                             "cached display name for a program that no longer exists",
                             typ, data))
     return out
+
+
+def _muicache_target(name: str) -> str:
+    """The program a MuiCache value name refers to. Modern names carry a
+    suffix (``C:\\x\\app.exe.FriendlyAppName``) and resource names look like
+    ``@C:\\x\\shell32.dll,-1234``; checking either as a path would call every
+    entry dangling."""
+    target = name
+    if target.startswith("@"):
+        target = target[1:].split(",", 1)[0]
+    for suffix in (".FriendlyAppName", ".ApplicationCompany"):
+        if target.endswith(suffix):
+            target = target[: -len(suffix)]
+            break
+    return target
 
 
 def _scan_app_paths() -> list[RegEntry]:
@@ -222,9 +297,26 @@ def _scan_open_with() -> list[RegEntry]:
     return out
 
 
+def obsolete_reason(install_location: str, uninstall_string: str) -> str:
+    """Why an Uninstall entry is provably dead, or "" if it is not.
+
+    Both the install folder and the uninstaller must be recorded and both must
+    be gone. One missing pointer is not proof - plenty of installed programs
+    have a stale InstallLocation, and an uninstaller run through ``MsiExec.exe``
+    cannot be checked as a file at all.
+    """
+    loc = (install_location or "").strip()
+    exe = _exe_from_command(uninstall_string or "")
+    if not loc or not exe:
+        return ""
+    if _exists(loc) or _exists(exe):
+        return ""
+    return f"install location and uninstaller both gone: {loc}; {exe}"
+
+
 def _scan_obsolete_software() -> list[RegEntry]:
-    """Uninstall entries where the install location and uninstaller are gone.
-    The entry is removed, never the program."""
+    """Uninstall entries where the install location and uninstaller are both
+    gone. The entry is removed, never the program."""
     roots = [
         ("HKLM", r"Software\Microsoft\Windows\CurrentVersion\Uninstall"),
         ("HKLM", r"Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
@@ -255,13 +347,10 @@ def _scan_obsolete_software() -> list[RegEntry]:
                     disp = get("DisplayName")
                 if not disp:
                     continue                     # updates/hidden entries
-                # only judge when we have something concrete to judge
-                if loc and not _exists(loc):
-                    out.append(RegEntry(hive, full, "subkey", None,
-                                        f"install location gone: {loc}"))
-                elif unins and not _exists(_exe_from_command(unins)):
-                    out.append(RegEntry(hive, full, "subkey", None,
-                                        f"uninstaller gone: {_exe_from_command(unins)}"))
+                # only judge when every concrete pointer is provably gone
+                why = obsolete_reason(loc, unins)
+                if why:
+                    out.append(RegEntry(hive, full, "subkey", None, why))
             except OSError:
                 continue
     return out
@@ -414,18 +503,23 @@ def scan_direct(spec: dict) -> list[RegEntry]:
 # --------------------------------------------------------------------------
 
 def backup(entries: list[RegEntry], path: str) -> str:
-    """Write a JSON backup that `restore()` can replay exactly."""
+    """Write a JSON backup that `restore()` can replay exactly, whole subkey
+    trees included. Raises OSError if anything cannot be read - the caller
+    must then not delete."""
+    recs = [e.backup_record() for e in entries]        # read before writing
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    recs = [e.backup_record() for e in entries]
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump({"version": 1, "entries": recs}, fh, indent=2)
+        json.dump({"version": 2, "entries": recs}, fh, indent=2)
     os.replace(tmp, path)
     return path
 
 
 def remove(entries: list[RegEntry]) -> tuple[int, int]:
-    """Delete the recorded values/subkeys. Returns (removed, failed)."""
+    """Delete the recorded values/subkeys. Returns (removed, failed).
+
+    Only an entry that was actually deleted counts as removed: a key that
+    could not be opened or deleted is a failure, not a success."""
     ok = fail = 0
     for e in entries:
         try:
@@ -441,26 +535,20 @@ def remove(entries: list[RegEntry]) -> tuple[int, int]:
 
 
 def _delete_tree(root, path: str) -> None:
-    """Recursively delete a subkey."""
-    try:
-        h = winreg.OpenKey(root, path, 0, KEY_READ | KEY_WRITE)
-    except OSError:
-        return
-    children = []
-    i = 0
-    while True:
-        try:
-            children.append(winreg.EnumKey(h, i))
-        except OSError:
-            break
-        i += 1
+    """Recursively delete a subkey. Raises OSError if any part of it cannot
+    be deleted."""
+    with winreg.OpenKey(root, path, 0, KEY_READ | KEY_WRITE) as h:
+        children = []
+        i = 0
+        while True:
+            try:
+                children.append(winreg.EnumKey(h, i))
+            except OSError:
+                break
+            i += 1
     for child in children:
         _delete_tree(root, f"{path}\\{child}")
-    h.Close()
-    try:
-        winreg.DeleteKey(root, path)
-    except OSError:
-        pass
+    winreg.DeleteKey(root, path)
 
 
 def restore(path: str) -> tuple[int, int]:
@@ -472,16 +560,18 @@ def restore(path: str) -> tuple[int, int]:
         try:
             hive = HIVES[rec["hive"]]
             if rec["kind"] == "subkey":
-                winreg.CreateKeyEx(hive, rec["key"], 0, KEY_WRITE)
+                if "tree" in rec:
+                    _write_tree(hive, rec["key"], rec["tree"])
+                else:
+                    # A version-1 backup recorded only the key's name; its
+                    # contents were never saved and cannot be brought back.
+                    with winreg.CreateKeyEx(hive, rec["key"], 0, KEY_WRITE):
+                        pass
             else:
-                h = winreg.CreateKeyEx(hive, rec["key"], 0, KEY_WRITE)
-                typ = rec.get("type") or winreg.REG_SZ
-                data = rec.get("data")
-                if rec.get("data_encoding") == "hex" and isinstance(data, str):
-                    data = bytes.fromhex(data)
-                winreg.SetValueEx(h, rec["value"] or "", 0, typ, data)
-                h.Close()
+                typ, data = _decode_value(rec)
+                with winreg.CreateKeyEx(hive, rec["key"], 0, KEY_WRITE) as h:
+                    winreg.SetValueEx(h, rec["value"] or "", 0, typ, data)
             ok += 1
-        except (OSError, KeyError, ValueError):
+        except (OSError, KeyError, ValueError, TypeError):
             fail += 1
     return ok, fail
