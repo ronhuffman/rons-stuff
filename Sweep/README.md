@@ -609,6 +609,39 @@ inventory, and the scheduler's launcher/weekday logic.
 
 ---
 
+## Building a standalone executable
+
+Running from source needs Python on `PATH`. To produce a binary that needs
+nothing installed:
+
+```
+pip install pyinstaller
+python -m PyInstaller --noconfirm --clean --onedir --windowed --name Sweep ^
+  --icon docs\sweep.ico --add-data "docs\icon.png;docs" --paths . ^
+  tools\pyinstaller_entry.py
+```
+
+Output is `dist\Sweep\` — a 2.4 MB `Sweep.exe` plus its runtime, about 30 MB in
+total and ~995 files. Keep the whole folder together; the `.exe` will not run
+without its neighbours.
+
+Notes that matter if you change this:
+
+* **`--onedir`, not `--onefile`.** One-file builds re-extract to `%TEMP%` on
+  every launch, costing a few seconds and triggering an antivirus scan each
+  time. Only the launcher and its folder need copying.
+* **`--windowed`** means no console. A crash produces no visible output, so
+  build with `--console` instead when diagnosing a startup failure.
+* **`--add-data "docs\icon.png;docs"`** is what keeps the in-window logo; the
+  GUI resolves it relative to the package root, which is the extraction root
+  when frozen.
+* `Sweep.spec` is committed, so `pyinstaller Sweep.spec` reproduces the build
+  without retyping the flags.
+* `build/` and `dist/` are gitignored — the binary is a release artefact, not
+  source.
+
+---
+
 ## Limitations — stated plainly
 
 * Rule coverage is curated, not exhaustive. Vendor-specific caches that are not

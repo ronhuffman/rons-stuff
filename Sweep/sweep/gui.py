@@ -3361,6 +3361,12 @@ class SweepApp(tk.Tk):
 
 def _relaunch_elevated_gui() -> bool:
     """Restart this GUI through UAC. Returns True when the parent should exit."""
+    if getattr(sys, "frozen", False):
+        # Packaged build: there is no interpreter or module to re-invoke, so
+        # relaunch the executable itself. Dropping -m sweep is essential.
+        return base.relaunch_elevated(
+            "--elevated", cwd=os.path.dirname(sys.executable), exe=sys.executable)
+
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     # prefer pythonw so the elevated instance has no console window
     exe = sys.executable
