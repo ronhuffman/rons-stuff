@@ -25,6 +25,9 @@ class Node:
     children: list["Node"] = field(default_factory=list)
     file_count: int = 0
     truncated: bool = False        # some children omitted to bound the tree
+    #: Entries that could not be read at all. A node with denied > 0 and a size
+    #: of 0 was not measured - it is not an empty folder.
+    denied: int = 0
 
 
 def disk_usage(path: str) -> tuple[int, int, int]:
@@ -55,6 +58,7 @@ def build_tree(root: str, max_depth: int = 3, max_children: int = 14,
         try:
             entries = list(os.scandir(path))
         except OSError:
+            node.denied = 1           # could not read, not empty
             return node
 
         kids: list[Node] = []

@@ -1801,10 +1801,16 @@ class SpaceTab(ttk.Frame):
             return
         self.up_btn.configure(state="normal" if node is not self.root_node else "disabled")
         parts = [p for p in node.path.replace("/", "\\").split("\\") if p]
-        self.crumb.configure(text="  \u203a  ".join(parts) + f"   \u00b7   {base.human(node.size)}")
+        crumb = "  \u203a  ".join(parts) + f"   \u00b7   {base.human(node.size)}"
+        if getattr(node, "denied", 0):
+            crumb += "   \u00b7   not readable"
+        self.crumb.configure(text=crumb)
         items = [(c.name, c.size) for c in node.children]
         if not items:
-            self.canvas.create_text(w // 2, h // 2, text="(empty)",
+            # An empty folder and a folder Windows refused to list now look
+            # different; they used to both read "(empty)".
+            label = "(not readable)" if getattr(node, "denied", 0) else "(empty)"
+            self.canvas.create_text(w // 2, h // 2, text=label,
                                     fill=COL_MUTED, font=f(11))
             return
         gap = px(2)
@@ -2186,9 +2192,10 @@ class AppsPanel(_ToolPanel):
     def list_apps(self) -> None:
         from . import apps as appmod
         needle = self._needle()
+        read_errors: list[str] = []
 
         def job(cancel, emit):
-            items = appmod.list_apps()
+            items = appmod.list_apps(read_errors)
             if needle:
                 items = [a for a in items if needle in a.name.lower()]
             total = len(items)
@@ -2213,10 +2220,23 @@ class AppsPanel(_ToolPanel):
                 self._apps[iid] = a
 
         def done(items):
-            self.set_status(f"{len(items)} application(s)   \u00b7   select one to "
-                            "uninstall it or look for leftovers")
+            status = (f"{len(items)} application(s)   \u00b7   select one to "
+                      "uninstall it or look for leftovers")
+            if read_errors:
+                # A short list must not read as "that is everything installed".
+                status = (f"{len(items)} application(s)   \u00b7   {len(read_errors)} "
+                          "registry location(s) not readable")
+                self.notice.show(
+                    "Some installed programs could not be listed: "
+                    + "; ".join(read_errors[:2])
+                    + (" - restart as administrator to see them all.",
+                       )[0],
+                    action=("Restart as administrator", self.app._elevate))
+            self.set_status(status)
             if not items:
-                self.table.set_empty("No programs match the filter")
+                self.table.set_empty(
+                    "No programs match the filter" if not read_errors
+                    else "No programs could be listed")
 
         self.run(job, on_done=done, on_progress=progress,
                  maximum=None, text="reading installed programs\u2026")
@@ -2347,9 +2367,10 @@ class DriversPanel(_ToolPanel):
 
     def inventory(self) -> None:
         from . import drivers
+        read_errors: list[str] = []
 
         def job(cancel, emit):
-            items = drivers.inventory()
+            items = drivers.inventory(read_errors)
             emit(0, 1, f"{len(items)} driver(s)")
             return items
 
@@ -2359,7 +2380,18 @@ class DriversPanel(_ToolPanel):
             for d in items:
                 self.installed.add(d.display_name or d.module_name,
                                    (d.driver_type, d.start_mode, d.path))
-            self.set_status(f"{len(items)} kernel driver(s) installed")
+            if read_errors:
+                # "0 drivers installed" must never be a failed read.
+                self.installed.set_empty(
+                    "The driver inventory could not be read, so Sweep does not "
+                    "know which drivers are installed.")
+                self.set_status("driver inventory unavailable")
+                self.notice.show(
+                    "Driver inventory could not be read: " + "; ".join(read_errors[:2]),
+                    action=("Restart as administrator", self.app._elevate)
+                    if not base.is_admin() else None)
+            else:
+                self.set_status(f"{len(items)} kernel driver(s) installed")
 
         self.run(job, on_done=done, text="reading driver registry\u2026")
 

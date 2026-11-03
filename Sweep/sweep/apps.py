@@ -62,8 +62,13 @@ def _read(hive_const: int, path: str, name: str) -> str:
         return ""
 
 
-def list_apps() -> list[App]:
-    """Every registered application, deduplicated by name+version."""
+def list_apps(errors: list[str] | None = None) -> list[App]:
+    """Every registered application, deduplicated by name+version.
+
+    Pass a list as *errors* to collect the Uninstall views that could not be
+    opened. Without that, a failed view is indistinguishable from a machine
+    with fewer programs installed.
+    """
     apps: list[App] = []
     seen: set[tuple[str, str]] = set()
     for hive, root, view in UNINSTALL_ROOTS:
@@ -79,7 +84,11 @@ def list_apps() -> list[App]:
                     except OSError:
                         break
                     i += 1
-        except OSError:
+        except FileNotFoundError:
+            continue              # this view does not exist on this machine
+        except OSError as exc:
+            if errors is not None:
+                errors.append(f"{root}: {exc.strerror or exc}")
             continue
         for sub in subs:
             path = f"{root}\\{sub}"
@@ -285,6 +294,19 @@ def winget_diagnose() -> tuple[bool, str]:
 _UPGRADE_ROW = re.compile(r"^(?P<name>.+?)\s{2,}(?P<id>\S+)\s+(?P<cur>\S+)\s+(?P<avail>\S+)\s+(?P<src>\S+)\s*$")
 
 
+def _winget_table_recognised(text: str) -> bool:
+    """Whether winget printed an upgrade table we understand.
+
+    Empty output counts as recognised (nothing to upgrade). Output we cannot
+    parse does not: treating it as an empty list is what lets a format change
+    read as "every package is current".
+    """
+    low = (text or "").strip().lower()
+    if not low:
+        return True
+    return "name" in low and "id" in low and "version" in low
+
+
 def parse_winget_upgrade(text: str) -> list[Upgrade]:
     """Parse `winget upgrade` table output.
 
@@ -336,6 +358,9 @@ def list_upgrades() -> tuple[list[Upgrade], str]:
     items = parse_winget_upgrade(text)
     if not items and r.returncode != 0:
         return [], "winget returned an error (code %d)" % r.returncode
+    if not items and not _winget_table_recognised(text):
+        return [], ("winget output could not be read (no upgrade table found) - "
+                    "the installed packages are not known to be current")
     return items, ""
 
 

@@ -137,13 +137,20 @@ def _inventory_registry() -> list[Driver]:
     return out
 
 
-def inventory() -> list[Driver]:
+def inventory(errors: list[str] | None = None) -> list[Driver]:
     """Installed kernel drivers, preferring driverquery and falling back to the
-    registry when it is unavailable or errors out."""
+    registry when it is unavailable or errors out.
+
+    Pass *errors* to learn that both sources failed. An empty list on its own
+    cannot be told apart from a machine with no drivers installed.
+    """
     drivers = _inventory_driverquery()
     if drivers:
         return drivers
-    return _inventory_registry()
+    drivers = _inventory_registry()
+    if not drivers and errors is not None:
+        errors.append("driverquery and the registry both returned nothing")
+    return drivers
 
 
 def _inventory_driverquery() -> list[Driver]:

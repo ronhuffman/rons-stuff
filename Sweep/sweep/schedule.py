@@ -212,7 +212,12 @@ try {
   }
   ConvertTo-Json -InputObject $d -Compress
 } catch {
-  Write-Output ('MISSING')
+  $m = $_.Exception.Message
+  if ($m -match 'does not exist|not be found|cannot find|The system cannot find') {
+    Write-Output ('MISSING')
+  } else {
+    Write-Output ('ERR:' + $m)
+  }
 }
 """
 
@@ -220,6 +225,9 @@ try {
 def status() -> ScheduleState:
     rc, out = _run_ps(_STATUS_PS.replace("__NAME__", _esc(TASK_NAME)))
     text = out.strip()
+    if text.startswith("ERR:"):
+        # Reaching Task Scheduler failed; that is not "nothing is scheduled".
+        return ScheduleState(installed=False, error=text[4:].strip()[:200])
     if text.startswith("MISSING"):
         return ScheduleState(installed=False)
     if not text:

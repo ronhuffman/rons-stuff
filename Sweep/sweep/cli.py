@@ -169,34 +169,47 @@ def _print_scan(res: scanner.ScanResult, verbose: bool, admin: bool) -> None:
     rows = []
     last_group = None
     for r in sorted(res.results, key=lambda x: (x.group, -x.size)):
-        if r.empty or r.error:
+        # A denied rule has count 0 but is not "empty": it was never measured.
+        # Keep it in the table so the totals cannot look cleaner than reality.
+        if r.empty and not (r.denied or r.error):
             continue
         if r.group != last_group:
             rows.append([r.group, "", "", ""])
             last_group = r.group
         mark = RISK_MARK.get(r.risk, "")
         badge = ""
-        if r.needs_admin and not admin:
+        if r.error:
+            badge = "could not run"
+        elif r.needs_admin and not admin:
             badge = "needs admin"
         elif r.denied:
-            badge = f"{r.denied} denied"
-        rows.append([f"  {mark}{r.name}", base.human(r.size), f"{r.count:,}", badge])
+            badge = f"{r.denied:,} not readable"
+        size_txt = base.human(r.size) if r.size else "\u2013"
+        rows.append([f"  {mark}{r.name}", size_txt, f"{r.count:,}" if r.count else "", badge])
     print(table(["category", "reclaimable", "files", "note"], rows,
                 aligns=["<", ">", ">", "<"]))
     print()
     print(f"  total reclaimable   {base.human(res.total_size)}")
     print(f"  total files         {res.total_count:,}")
     print(f"  scanned in          {res.duration:.1f}s")
+    if getattr(res, "cancelled", False):
+        print("  stopped early       scan cancelled - totals above are partial")
+    blocked = sum(r.denied for r in res.results)
+    if blocked:
+        print(f"  not readable        {blocked:,} path(s)"
+              + ("" if admin else "  - re-run as administrator to measure them"))
     if verbose:
         print()
         for r in res.results:
-            if r.empty:
-                print(f"  - {r.rule_id}: nothing present")
-            elif r.error:
+            # Denial and error first: an all-denied rule is r.empty too, and
+            # calling that "nothing present" was the whole problem.
+            if r.error:
                 print(f"  ! {r.rule_id}: {r.error}")
             elif r.denied:
                 print(f"  ~ {r.rule_id}: {r.denied} path(s) not readable "
                       f"({'elevate for full coverage' if not admin else 'locked'})")
+            elif r.empty:
+                print(f"  - {r.rule_id}: nothing present")
 
 
 def cmd_scan(args) -> int:

@@ -53,6 +53,8 @@ class ScanResult:
     duration: float = 0.0
     files_seen: int = 0
     allowlist: set[str] = field(default_factory=set)
+    #: True when the scan stopped early, so totals are a lower bound.
+    cancelled: bool = False
 
     @property
     def total_size(self) -> int:
@@ -297,6 +299,7 @@ def scan(rule_ids: list[str] | None = None,
     if workers <= 1 or total_rules <= 2:
         for idx, rule in enumerate(selected):
             if cancel is not None and cancel.is_set():
+                result.cancelled = True
                 break
             if progress:
                 progress(idx, total_rules, rule["name"], result.total_size)

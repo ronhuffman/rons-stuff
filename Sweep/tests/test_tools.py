@@ -754,3 +754,63 @@ class TestUnreadableSources(unittest.TestCase):
         from sweep import health
         c = health.check_reliability([])
         self.assertEqual(c.status, health.OK)
+
+
+class TestCoverageHonesty(unittest.TestCase):
+    """A source that could not be read must not report a confident count."""
+
+    def test_winget_output_without_a_table_is_not_current(self):
+        self.assertFalse(apps._winget_table_recognised("unexpected output here"))
+        self.assertTrue(apps._winget_table_recognised(""),
+                        "empty output means nothing to upgrade")
+        self.assertTrue(apps._winget_table_recognised(
+            "Name   Id   Version   Available"))
+
+    def test_list_upgrades_reports_unreadable_output(self):
+        class R:
+            returncode = 0
+            stdout = "something entirely different\n"
+            stderr = ""
+        orig = apps.subprocess.run
+        apps.subprocess.run = lambda *a, **k: R()
+        try:
+            items, err = apps.list_upgrades()
+        finally:
+            apps.subprocess.run = orig
+        self.assertEqual(items, [])
+        self.assertTrue(err, "unparsable output must not read as 'all current'")
+
+    def test_driver_inventory_reports_when_both_sources_fail(self):
+        errors: list[str] = []
+        orig_dq = drivers._inventory_driverquery
+        orig_reg = drivers._inventory_registry
+        drivers._inventory_driverquery = lambda: []
+        drivers._inventory_registry = lambda: []
+        try:
+            items = drivers.inventory(errors)
+        finally:
+            drivers._inventory_driverquery = orig_dq
+            drivers._inventory_registry = orig_reg
+        self.assertEqual(items, [])
+        self.assertTrue(errors, "an empty inventory must say why it is empty")
+
+    def test_apps_report_can_collect_unreadable_roots(self):
+        errors: list[str] = []
+        items = apps.list_apps(errors)
+        self.assertIsInstance(items, list)
+        self.assertIsInstance(errors, list)
+
+    def test_scheduler_failure_is_not_not_installed(self):
+        orig = schedule._run_ps
+        schedule._run_ps = lambda *a, **k: (0, "ERR:Access is denied")
+        try:
+            st = schedule.status()
+        finally:
+            schedule._run_ps = orig
+        self.assertFalse(st.installed)
+        self.assertTrue(st.error, "an unreachable scheduler must carry an error")
+        self.assertIn("Access", st.error)
+
+    def test_cancelled_scan_flag_exists(self):
+        from sweep import scanner
+        self.assertFalse(scanner.ScanResult().cancelled)
