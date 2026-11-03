@@ -1,6 +1,6 @@
 # Ron's Stuff
 
-Personal laundry-monitor projects: MicroPython on Raspberry Pi Pico 2 W, Wi-Fi application updates, a shared Kauf indicator bulb, and Home Assistant integration.
+Personal laundry-monitor projects: MicroPython on Raspberry Pi Pico 2 W, Wi-Fi application updates, a shared Kauf indicator bulb, and Home Assistant integration. This repository also hosts **Sweep**, a separate Windows maintenance tool.
 
 This is a **sanitized public-source snapshot**, prepared September 13, 2026. It is separate from any private work repository. It contains no working Wi-Fi credentials, update tokens or installation addresses. The example settings must be customized before installation; do not upload these public files over an already working installation unchanged.
 
@@ -11,6 +11,11 @@ This is a **sanitized public-source snapshot**, prepared September 13, 2026. It 
 | [washer](washer/README.md) | Washer 6.0.0 application, A/B launcher, Windows Wi-Fi updater, configuration example and tests |
 | [dryer](dryer/README.md) | Dryer 5.0.0 application, A/B launcher, Windows Wi-Fi updater, configuration example and tests |
 | [shared-and-home-assistant](shared-and-home-assistant/README.md) | How the Picos, Shelly, shared Kauf bulb and HA relate; selected, sanitized HA configuration and dashboard |
+| [Sweep](Sweep/README.md) | Windows cleaner and laptop-health tool (Python/tkinter). Cleaning rules, Windows Update, drivers, secure erase, scheduled cleaning and health scoring, with a 134-test safety suite |
+
+**Sweep** is unrelated to the laundry projects — it is a general Windows maintenance
+tool that lives here to have a public home. Its own [README](Sweep/README.md)
+documents it in full.
 
 ## Current project status
 
