@@ -1,11 +1,26 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
+import sys
+
+# The licence of the Python this build bundles. It covers Python and the
+# libraries the python.org Windows build ships with (OpenSSL, Tcl/Tk, SQLite,
+# zlib, bzip2, xz, libffi, expat, mpdecimal, the Microsoft runtime). Their
+# licences require the notices to travel with the program, so a build without
+# them is refused rather than shipped.
+PY_LICENSE = os.path.join(sys.base_prefix, 'LICENSE.txt')
+if not os.path.isfile(PY_LICENSE):
+    raise SystemExit(f"Python licence not found at {PY_LICENSE} - refusing to build "
+                     "a binary without its third-party notices")
 
 
 a = Analysis(
     ['tools\\pyinstaller_entry.py'],
     pathex=['.'],
     binaries=[],
-    datas=[('docs\\icon.png', 'docs')],
+    datas=[('docs\\icon.png', 'docs'),
+           ('LICENSE', '.'),
+           ('THIRD-PARTY-NOTICES.md', '.'),
+           (PY_LICENSE, 'licenses\\python')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

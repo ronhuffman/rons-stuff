@@ -2,10 +2,9 @@
 
 A Windows cleaner that **shows its work**, never nags, and does not phone home.
 
-Built as an independent replacement for CCleaner 7 after reverse-engineering what
-that product actually does under the hood — and after confirming that most of its
-remaining value sits behind a subscription. Sweep covers the same ground, adds the
-things CCleaner does not do, and refuses to do the things CCleaner should not.
+A free, independent alternative to cleaners such as CCleaner. Sweep covers the
+same ground, adds things those tools do not do, and refuses to do the things a
+cleaner should not.
 
 ```
 sweep scan                     # measure, change nothing
@@ -22,17 +21,14 @@ Screenshots: [`docs/clean.png`](docs/clean.png) ·
 [`docs/space.png`](docs/space.png) · [`docs/startup.png`](docs/startup.png) ·
 [`docs/tools.png`](docs/tools.png) · [`docs/drivers.png`](docs/drivers.png) ·
 [`docs/health.png`](docs/health.png).
-What CCleaner 7 actually does, and what was learned from it:
-[`docs/ccleaner-analysis.md`](docs/ccleaner-analysis.md).
 
 ---
 
 ## Why this exists
 
-CCleaner 7 ships its cleaning logic as a **plain-text rules file**
-(`ccleaner.ini`, 769 sections, ~3,000 file rules) driven by a native engine and a
-WebView2 front end. Reading that file establishes precisely what it cleans. Two
-observations followed:
+CCleaner installs its cleaning rules as a **plain-text file** (`ccleaner.ini`),
+so what it cleans is visible to anyone who has it installed. Two observations
+followed:
 
 1. A large share of the useful work is *just* enumerated cache directories.
 2. The differences that matter to a buyer are not the cleaning — they are the
@@ -652,6 +648,9 @@ Notes that matter if you change this:
   without retyping the flags.
 * `build/` and `dist/` are gitignored — the binary is a release artefact, not
   source.
+* `Sweep.spec` bundles `LICENSE`, `THIRD-PARTY-NOTICES.md` and the `LICENSE.txt`
+  of the Python used for the build (under `_internal\licenses\python\`). The
+  build stops if that file is missing, so a binary never ships without them.
 
 ---
 
@@ -667,3 +666,17 @@ Notes that matter if you change this:
   WebView2 surface CCleaner uses. That is a deliberate trade for zero dependencies.
 * `sweep analyze --duplicates` reads file contents and is I/O bound; on a large
   volume it is slow by nature.
+
+---
+
+## Licence
+
+Sweep is released under the MIT licence - see [`LICENSE`](LICENSE).
+
+The packaged `Sweep.exe` also contains software written by others (Python, Tcl/Tk,
+OpenSSL and the libraries Python ships with). Their licences allow this and ask
+for their notices to travel with the program; the build bundles them - see
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
+
+Sweep is not affiliated with or endorsed by Piriform or Gen Digital. CCleaner is
+their trademark and is named here only to describe compatibility.
