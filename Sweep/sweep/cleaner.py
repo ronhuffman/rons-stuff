@@ -198,11 +198,32 @@ def clean(scan_result: scanner.ScanResult,
     if rule_ids is not None:
         targets = [r for r in targets if r.rule_id in rule_ids]
 
-    # An allow-list is only meaningful when there are files to remove. A run
-    # that consists solely of system actions (recycle bin, DISM) legitimately
-    # has no file allow-list.
-    if not allow and mode != "dry-run" and any(t.count for t in targets):
+    # The allow-list guards files. A run without files - system actions, or
+    # registry entries, which have their own backup gate - has none, and that
+    # is not a reason to refuse it.
+    if not allow and mode != "dry-run" and any(t.files for t in targets):
         raise PermissionError("allow-list is empty; refusing to run any deletion")
+
+    link_cache: dict[str, str] = {}
+
+    def refusal(path: str) -> str:
+        """Why *path* must not be touched now, or "" if it may be.
+
+        Every file - plain delete, recycle, secure wipe or cookie filter - must
+        have been previewed by the scanner, and must not be reached through a
+        symlink or junction. The scan refuses linked roots, but a folder can be
+        swapped for a link between the scan and the clean, so the path is
+        checked again here.
+        """
+        if base.norm(path) not in allow:
+            return "not in allow-list"
+        folder = os.path.dirname(path)
+        if folder not in link_cache:
+            link_cache[folder] = base.through_link(folder)
+        hop = link_cache[folder] or (path if base.is_link(path) else "")
+        if hop:
+            return f"reached through a link ({hop})"
+        return ""
 
     keep_error = ""
     if any(t.handler == "cookie_dbs" for t in targets):
@@ -299,6 +320,13 @@ def clean(scan_result: scanner.ScanResult,
                 and not simulated and rr.files):
             from . import keep as keepmod
             for path, size in rr.files:
+                why = refusal(path)
+                if why:
+                    out.failed += 1
+                    out.errors.append(f"{why}: {path}")
+                    if log:
+                        log.write(rule=rr.rule_id, path=path, result="refused", reason=why)
+                    continue
                 res = keepmod.filter_cookies(path, keep_domains,
                                              make_backup=backup_cookies)
                 if res.error:
@@ -319,6 +347,11 @@ def clean(scan_result: scanner.ScanResult,
             continue
         elif rr.handler == "cookie_dbs" and keep_domains and simulated:
             for path, size in rr.files:
+                why = refusal(path)
+                if why:
+                    out.failed += 1
+                    out.errors.append(f"{why}: {path}")
+                    continue
                 out.deleted += 1
                 out.bytes += size
             out.kept = -1                      # unknown before the real filter
@@ -329,13 +362,15 @@ def clean(scan_result: scanner.ScanResult,
         for path, size in rr.files:
             if cancel is not None and cancel.is_set():
                 break
-            key = base.norm(path)
-            if key not in allow:
-                # A path the scanner did not preview. Never delete it.
+            why = refusal(path)
+            if why:
+                # Not previewed by the scanner, or reached through a link.
+                # Never delete it.
                 out.failed += 1
-                out.errors.append(f"not in allow-list: {path}")
+                out.errors.append(f"{why}: {path}")
                 if log:
-                    log.write(rule=rr.rule_id, path=path, size=size, result="refused")
+                    log.write(rule=rr.rule_id, path=path, size=size, result="refused",
+                              reason=why)
                 continue
 
             if simulated:

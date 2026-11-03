@@ -92,29 +92,38 @@ def _decode_value(rec: dict):
     return typ, data
 
 
+#: Win32 ERROR_NO_MORE_ITEMS - the only error that means "enumeration done".
+_NO_MORE_ITEMS = 259
+
+
+def _enum_all(fn, h) -> list:
+    """Every item ``fn(h, i)`` yields, in order. Only ERROR_NO_MORE_ITEMS ends
+    the list; any other error (access denied, a key deleted underneath us, a
+    failed read) is raised, so a partial list can never pass for a whole one."""
+    items = []
+    i = 0
+    while True:
+        try:
+            items.append(fn(h, i))
+        except OSError as exc:
+            code = getattr(exc, "winerror", None)
+            if code is None:
+                code = exc.errno
+            if code == _NO_MORE_ITEMS:
+                return items
+            raise
+        i += 1
+
+
 def _read_tree(root, path: str, depth: int = 0) -> dict:
     """Every value and subkey under *path*. Raises OSError if any part cannot
     be read: an incomplete backup must stop the deletion, not excuse it."""
     if depth > 64:
         raise OSError(f"registry tree too deep to back up: {path}")
     with winreg.OpenKey(root, path, 0, KEY_READ) as h:
-        values = []
-        i = 0
-        while True:
-            try:
-                name, data, typ = winreg.EnumValue(h, i)
-            except OSError:
-                break
-            values.append(dict(name=name, **_encode_value(typ, data)))
-            i += 1
-        names = []
-        i = 0
-        while True:
-            try:
-                names.append(winreg.EnumKey(h, i))
-            except OSError:
-                break
-            i += 1
+        values = [dict(name=name, **_encode_value(typ, data))
+                  for name, data, typ in _enum_all(winreg.EnumValue, h)]
+        names = _enum_all(winreg.EnumKey, h)
     return {"values": values,
             "subkeys": {n: _read_tree(root, f"{path}\\{n}", depth + 1) for n in names}}
 
@@ -268,6 +277,50 @@ def _scan_shared_dlls() -> list[RegEntry]:
     return out
 
 
+def _registered_applications(name: str) -> list[str]:
+    """Every executable a bare Open-with name is registered to. Windows
+    resolves names such as ``Code.exe`` through ``Classes\\Applications\\<name>``
+    and App Paths, not through System32."""
+    found = []
+    for hive in ("HKCU", "HKLM"):
+        for key, value in ((rf"Software\Classes\Applications\{name}\shell\open\command", ""),
+                           (rf"Software\Microsoft\Windows\CurrentVersion\App Paths\{name}", "")):
+            h = _try_open(hive, key)
+            if h is None:
+                continue
+            try:
+                with h:
+                    cmd, _typ = winreg.QueryValueEx(h, value)
+            except OSError:
+                continue
+            if isinstance(cmd, str) and cmd.strip():
+                found.append(_exe_from_command(cmd))
+    return [t for t in found if t]
+
+
+def open_with_reason(handler: str) -> str:
+    """Why an OpenWithList handler is provably missing, or "" if it is not.
+
+    A path is judged directly. A bare name is only judged when Windows has a
+    registration for it whose target is gone; a name that is in the Windows
+    folders, or that has no registration Sweep can read, is never called
+    missing - "not in System32" says nothing about a third-party program.
+    """
+    h = (handler or "").strip()
+    if not h:
+        return ""
+    if os.path.sep in h or "/" in h:
+        return "" if _exists(h) else f"handler missing: {h}"
+    win = os.environ.get("WINDIR", r"C:\Windows")
+    for folder in (os.path.join(win, "System32"), win):
+        if os.path.exists(os.path.join(folder, h)):
+            return ""
+    targets = _registered_applications(h)
+    if not targets or any(_exists(t) for t in targets):
+        return ""
+    return f"handler {h} is registered to a missing program: {targets[0]}"
+
+
 def _scan_open_with() -> list[RegEntry]:
     """FileExts\\<ext>\\OpenWithList entries naming missing executables."""
     root = r"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts"
@@ -287,13 +340,10 @@ def _scan_open_with() -> list[RegEntry]:
             if name.lower() == "mrulist":
                 continue
             if isinstance(data, str) and data.strip():
-                # a bare image name is resolved against System32
-                probe = data if os.path.sep in data else os.path.join(
-                    os.environ.get("WINDIR", r"C:\Windows"), "System32", data)
-                if not _exists(probe):
+                why = open_with_reason(data)
+                if why:
                     out.append(RegEntry("HKCU", owl, "value", name,
-                                        f"open-with handler missing for {ext}: {data}",
-                                        typ, data))
+                                        f"open-with for {ext}: {why}", typ, data))
     return out
 
 
@@ -538,14 +588,7 @@ def _delete_tree(root, path: str) -> None:
     """Recursively delete a subkey. Raises OSError if any part of it cannot
     be deleted."""
     with winreg.OpenKey(root, path, 0, KEY_READ | KEY_WRITE) as h:
-        children = []
-        i = 0
-        while True:
-            try:
-                children.append(winreg.EnumKey(h, i))
-            except OSError:
-                break
-            i += 1
+        children = _enum_all(winreg.EnumKey, h)
     for child in children:
         _delete_tree(root, f"{path}\\{child}")
     winreg.DeleteKey(root, path)

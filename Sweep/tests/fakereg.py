@@ -18,8 +18,9 @@ class _Node:
 
 
 class _Handle:
-    def __init__(self, node: _Node) -> None:
+    def __init__(self, node: _Node, path: str = "") -> None:
         self.node = node
+        self.path = path.lower()
         self.closed = False
 
     def _live(self) -> _Node:
@@ -46,8 +47,17 @@ class FakeWinreg:
         self.roots: dict[object, _Node] = {}
         #: lower-case subkey paths that OpenKey refuses, to simulate denial
         self.denied: set[str] = set()
+        #: lower-case subkey path -> error raised by EnumKey/EnumValue after
+        #: the first item, to simulate an enumeration that fails part-way
+        self.enum_errors: dict[str, OSError] = {}
 
     # ---- navigation ------------------------------------------------------
+    @staticmethod
+    def _join(key, sub: str) -> str:
+        parts = [key.path] if isinstance(key, _Handle) and key.path else []
+        parts += [p for p in (sub or "").split("\\") if p]
+        return "\\".join(parts)
+
     def _base(self, key) -> _Node:
         if isinstance(key, _Handle):
             return key._live()
@@ -69,12 +79,12 @@ class FakeWinreg:
     def OpenKey(self, key, sub, reserved=0, access=0):
         if (sub or "").lower() in self.denied:
             raise PermissionError(5, "Access is denied")
-        return _Handle(self._walk(key, sub, create=False))
+        return _Handle(self._walk(key, sub, create=False), self._join(key, sub))
 
     OpenKeyEx = OpenKey
 
     def CreateKeyEx(self, key, sub, reserved=0, access=0):
-        return _Handle(self._walk(key, sub, create=True))
+        return _Handle(self._walk(key, sub, create=True), self._join(key, sub))
 
     def CreateKey(self, key, sub):
         return self.CreateKeyEx(key, sub)
@@ -82,13 +92,20 @@ class FakeWinreg:
     def CloseKey(self, h) -> None:
         h.Close()
 
+    def _maybe_fail(self, h, i) -> None:
+        err = self.enum_errors.get(h.path)
+        if err is not None and i >= 1:
+            raise err
+
     def EnumKey(self, h, i):
+        self._maybe_fail(h, i)
         names = [n for n, _ in h._live().keys.values()]
         if i >= len(names):
             raise OSError(259, "No more data is available")
         return names[i]
 
     def EnumValue(self, h, i):
+        self._maybe_fail(h, i)
         vals = list(h._live().values.values())
         if i >= len(vals):
             raise OSError(259, "No more data is available")
