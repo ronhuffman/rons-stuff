@@ -272,19 +272,35 @@ _EVENT_PS = r"""
 $ErrorActionPreference = 'SilentlyContinue'
 $since = (Get-Date).AddDays(-__DAYS__)
 $ids = @(41, 6008, 1001, 7, 51, 153, 55)
-$out = @()
-foreach ($id in $ids) {
-  $ev = Get-WinEvent -FilterHashtable @{LogName='System'; Id=$id; StartTime=$since} -MaxEvents 60
-  foreach ($e in $ev) {
-    $out += [pscustomobject]@{
-      Id       = $id
-      Time     = $e.TimeCreated.ToString('yyyy-MM-dd HH:mm')
-      Provider = $e.ProviderName
-      Message  = (($e.Message -split "`r?`n")[0])
+
+# Prove the log is readable before trusting an empty result. Without this,
+# access denied and "no events found" are the same output, so a locked-down
+# machine reports a perfectly stable PC.
+$probeError = $null
+try { Get-WinEvent -LogName System -MaxEvents 1 -ErrorAction Stop | Out-Null }
+catch { $probeError = $_.Exception.Message }
+
+if ($probeError) {
+  Write-Output ('ERR:' + $probeError)
+} else {
+  $out = @()
+  foreach ($id in $ids) {
+    $ev = Get-WinEvent -FilterHashtable @{LogName='System'; Id=$id; StartTime=$since} -MaxEvents 60
+    foreach ($e in $ev) {
+      $out += [pscustomobject]@{
+        Id       = $id
+        Time     = $e.TimeCreated.ToString('yyyy-MM-dd HH:mm')
+        Provider = $e.ProviderName
+        Message  = (($e.Message -split "`r?`n")[0])
+      }
     }
   }
+  if ($out.Count -eq 0) {
+    Write-Output '[]'
+  } else {
+    ConvertTo-Json -InputObject @($out) -Compress -Depth 3
+  }
 }
-ConvertTo-Json -InputObject @($out) -Compress -Depth 3
 """
 
 _SHUTDOWN_IDS = {41, 6008, 1001}
@@ -327,7 +343,7 @@ def _distinct_incidents(events: list[dict], ids: set[int],
     return incidents
 
 
-def check_reliability(events: list[dict], days: int = 30) -> Check:
+def check_reliability(events: list[dict] | None, days: int = 30) -> Check:
     if events is None:
         return Check("reliability", f"Stability ({days}d)", UNKNOWN,
                      "event log unavailable")
@@ -364,15 +380,23 @@ def check_reliability(events: list[dict], days: int = 30) -> Check:
                  detail=detail)
 
 
-def fetch_events(days: int = 30) -> list[dict]:
+def fetch_events(days: int = 30) -> list[dict] | None:
+    """Read recent critical System events.
+
+    Returns ``None`` when the log could not be read, and ``[]`` only when the
+    log was read successfully and contained nothing. Collapsing the two is what
+    let an unreadable log look like a perfectly stable machine.
+    """
     rc, out = _ps(_EVENT_PS.replace("__DAYS__", str(int(days))), timeout=180)
     text = out.strip()
-    if not text or text.lower().startswith("convertto-json"):
-        return []
+    if not text or text.startswith("ERR:"):
+        return None
+    if text.lower().startswith("convertto-json"):
+        return None
     try:
         blob = json.loads(text)
     except ValueError:
-        return []
+        return None
     if isinstance(blob, dict):
         blob = [blob]
     return [e for e in (blob or []) if isinstance(e, dict)]
@@ -380,6 +404,7 @@ def fetch_events(days: int = 30) -> list[dict]:
 
 def check_startup_load() -> Check:
     count = 0
+    unreadable = []
     for hive, path in ((HKCU, r"Software\Microsoft\Windows\CurrentVersion\Run"),
                        (HKLM, r"Software\Microsoft\Windows\CurrentVersion\Run"),
                        (HKLM, r"Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Run")):
@@ -393,8 +418,16 @@ def check_startup_load() -> Check:
                         i += 1
                     except OSError:
                         break
+        except FileNotFoundError:
+            continue              # this Run location does not exist here
         except OSError:
-            continue
+            unreadable.append(path)
+    if unreadable:
+        return Check("startup", "Startup programs", UNKNOWN,
+                     f"{count} readable, {len(unreadable)} not readable",
+                     "Some startup locations could not be opened, so the count is "
+                     "a lower bound. Restart as administrator for a full count.",
+                     detail=[f"could not read: {p}" for p in unreadable])
     if count >= 15:
         return Check("startup", "Startup programs", WARN, f"{count} entries",
                      "A heavy startup set slows every login. Review them on the "

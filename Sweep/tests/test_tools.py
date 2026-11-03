@@ -680,3 +680,77 @@ class TestFrozenBuild(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(self.captured["params"], "-m sweep gui --elevated")
         self.assertIn("pythonw", self.captured["exe"].lower())
+
+
+class TestCleanPageHonesty(unittest.TestCase):
+    """A rule that could not be read must never look like an empty folder.
+
+    The bug this pins: ``_rule_values`` returned on ``rr.empty`` before it
+    looked at ``rr.denied``, so the one case that matters - every path denied,
+    count therefore zero - showed no note at all.
+    """
+
+    def _rr(self, **kw):
+        from sweep import scanner
+        r = scanner.RuleResult(rule_id="x", name="X", group="Test",
+                               needs_admin=False, risk="safe")
+        for k, v in kw.items():
+            setattr(r, k, v)
+        return r
+
+    def _values(self, rr):
+        import types
+        from sweep import gui
+        fake = types.SimpleNamespace(_admin=True)
+        return gui.CleanTab._rule_values(fake, {"id": "x", "needs_admin": False}, rr)
+
+    def test_fully_denied_rule_reports_the_denial(self):
+        size, _, notes = self._values(self._rr(count=0, size=0, denied=7))
+        self.assertIn("7 denied", notes)
+        self.assertEqual(size, "\u2013")
+
+    def test_errored_rule_reports_the_error(self):
+        _, _, notes = self._values(self._rr(count=0, size=0, error="boom"))
+        self.assertIn("error", notes)
+
+    def test_genuinely_empty_rule_stays_silent(self):
+        size, _, notes = self._values(self._rr(count=0, size=0))
+        self.assertEqual(notes, "", "an empty folder must not claim a problem")
+        self.assertEqual(size, "\u2013")
+
+    def test_normal_rule_shows_size(self):
+        size, files, notes = self._values(self._rr(count=3, size=100))
+        self.assertEqual(size, "100 B")
+        self.assertEqual(files, "3")
+        self.assertEqual(notes, "")
+
+
+class TestUnreadableSources(unittest.TestCase):
+    """Unreadable must be UNKNOWN, never OK."""
+
+    def test_unreadable_event_log_is_not_an_empty_log(self):
+        from sweep import health
+        orig = health._ps
+        try:
+            health._ps = lambda *a, **k: (1, "")
+            self.assertIsNone(health.fetch_events(), "no output means unreadable")
+            health._ps = lambda *a, **k: (0, "ERR:Access is denied")
+            self.assertIsNone(health.fetch_events(), "explicit error means unreadable")
+            health._ps = lambda *a, **k: (0, "[]")
+            self.assertEqual(health.fetch_events(), [],
+                             "a successfully read empty log is a real empty list")
+            health._ps = lambda *a, **k: (0, "{ this is not json")
+            self.assertIsNone(health.fetch_events(), "unparsable means unreadable")
+        finally:
+            health._ps = orig
+
+    def test_reliability_is_unknown_when_events_unavailable(self):
+        from sweep import health
+        c = health.check_reliability(None)
+        self.assertEqual(c.status, health.UNKNOWN)
+        self.assertIn("unavailable", c.value)
+
+    def test_reliability_ok_only_with_a_real_empty_list(self):
+        from sweep import health
+        c = health.check_reliability([])
+        self.assertEqual(c.status, health.OK)

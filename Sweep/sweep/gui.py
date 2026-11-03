@@ -1243,12 +1243,15 @@ class CleanTab(ttk.Frame):
             notes.append("needs admin")
         if rr is None:
             return ("", "", ", ".join(notes))
-        if rr.empty:
-            return ("\u2013", "", ", ".join(notes))
+        # Report denial and error BEFORE the empty test. An all-denied rule has
+        # a count of zero but is not empty - it was never measured. Returning
+        # early here used to hide exactly the case that matters.
         if rr.error:
             notes.append("error")
         elif rr.denied:
             notes.append(f"{rr.denied:,} denied")
+        if rr.empty:
+            return ("\u2013", "", ", ".join(notes))
         size_txt = base.human(rr.size) if rr.size else "\u2013"
         files_txt = f"{rr.count:,}"
         if rr.reg_items and not rr.files:
@@ -1280,7 +1283,11 @@ class CleanTab(ttk.Frame):
             if not only:
                 return True
             rr = by_id.get(r["id"])
-            return rr is not None and not rr.empty
+            if rr is None:
+                return False
+            # "found" must not hide a rule that could not be read: that is the
+            # difference between an empty folder and an unreadable one.
+            return not rr.empty or bool(rr.denied) or bool(rr.error)
 
         def rollup(b: int, c: int) -> tuple[str, str, str]:
             if res is None:
@@ -1486,10 +1493,19 @@ class CleanTab(ttk.Frame):
             self.last_scan = res
             self._set_running(False)
             found = len(res.actionable())
-            self.total_lbl.configure(text=f"{base.human(res.total_size)} can be freed")
-            self.status.configure(
-                text=f"{res.total_count:,} files in {found} categor"
-                     f"{'y' if found == 1 else 'ies'}   \u00b7   scanned in {res.duration:.1f}s")
+            unclear = sum(r.denied for r in res.results)
+            if not res.total_size and unclear:
+                # "0 B" would read as a clean machine. It is not: nothing was
+                # measured. Say so instead.
+                self.total_lbl.configure(
+                    text="Nothing could be measured \u2014 some paths are unreadable")
+            else:
+                self.total_lbl.configure(text=f"{base.human(res.total_size)} can be freed")
+            status = (f"{res.total_count:,} files in {found} categor"
+                      f"{'y' if found == 1 else 'ies'}   \u00b7   scanned in {res.duration:.1f}s")
+            if unclear:
+                status += f"   \u00b7   {unclear:,} path(s) not readable"
+            self.status.configure(text=status)
             self.only_found.set(True)
             self.found_chk.configure(state="normal")
             self._populate()
@@ -1514,7 +1530,22 @@ class CleanTab(ttk.Frame):
         ids = [r for r in self.selected]
         plan = [r for r in res.results if r.rule_id in ids and not r.empty]
         if not plan:
-            messagebox.showinfo("Sweep", "Nothing selected has anything to clean.")
+            in_selection = [r for r in res.results if r.rule_id in ids]
+            denied = sum(r.denied for r in in_selection)
+            errored = sum(1 for r in in_selection if r.error)
+            if denied or errored:
+                msg = f"{denied:,} path(s) were denied by Windows"
+                if errored:
+                    msg += f" and {errored} rule(s) could not run"
+                messagebox.showwarning(
+                    "Sweep",
+                    f"Nothing could be measured for this selection.\n\n{msg}."
+                    "\n\nRestart Sweep as administrator to measure them, then try "
+                    "again - these items were never checked, not found clean.",
+                    parent=self)
+            else:
+                messagebox.showinfo("Sweep", "Nothing selected has anything to clean.",
+                                    parent=self)
             return
 
         total = sum(r.size for r in plan)
