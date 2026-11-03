@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sweep-cleaner"
+version = "1.0.0"
+description = "A Windows cleaner that shows its work and never nags"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = []
+
+[project.scripts]
+sweep = "sweep.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["sweep*"]

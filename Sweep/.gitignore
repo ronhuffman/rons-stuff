@@ -1,0 +1,15 @@
+# test fixtures (recreated by the test suite)
+.test-tmp/
+__pycache__/
+*.pyc
+logs/
+build/
+dist/
+*.egg-info/
+.state/
+
+# historical copies kept by hand; not part of the project
+backup/
+
+# local verification evidence: contains machine name, OS build and health state
+docs/verification.md
