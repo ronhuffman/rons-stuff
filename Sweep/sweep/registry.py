@@ -365,13 +365,16 @@ def implemented() -> list[str]:
     return sorted(SCANNERS)
 
 
-def scan_category(category: str) -> list[RegEntry]:
+def scan_category(category: str, errors: list[str] | None = None) -> list[RegEntry]:
     fn = SCANNERS.get(category)
     if fn is None:
         return []
     try:
         return fn()
-    except OSError:
+    except OSError as exc:
+        # Returning [] here made an unreadable key look like a clean one.
+        if errors is not None:
+            errors.append(f"{category}: {exc.strerror or exc}")
         return []
 
 

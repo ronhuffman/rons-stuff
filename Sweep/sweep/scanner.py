@@ -132,6 +132,8 @@ def _walk(root: str, pats: list[str], recurse: bool, min_age_hours: float,
                         deadline_check()
                     try:
                         is_dir = de.is_dir(follow_symlinks=False)
+                    except TimeoutError:
+                        raise            # deadline, not a denial
                     except OSError:
                         stats["denied"] += 1
                         continue
@@ -225,17 +227,17 @@ def _scan_rule(rule: dict, cancel: "base.Cancel | None", now: float,
             try:
                 rr.reg_items.extend(regmod.scan_direct(spec))
             except OSError:
-                pass
+                stats["denied"] += 1        # unreadable, not clean
         targets_present += max(1, len(rr.reg_items))
 
     # ---- registry: orphan-detection category ----------------------------
     cat = rule.get("reg_scan")
     if cat:
         from . import registry as regmod
-        try:
-            rr.reg_items.extend(regmod.scan_category(cat))
-        except OSError:
-            pass
+        reg_errors: list[str] = []
+        rr.reg_items.extend(regmod.scan_category(cat, reg_errors))
+        if reg_errors and not rr.reg_items:
+            stats["denied"] += len(reg_errors)
         targets_present += max(1, len(rr.reg_items))
 
     rr.denied = stats["denied"]

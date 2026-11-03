@@ -1250,6 +1250,8 @@ class CleanTab(ttk.Frame):
             notes.append("error")
         elif rr.denied:
             notes.append(f"{rr.denied:,} denied")
+        if rr.skipped:
+            notes.append(f"{rr.skipped:,} skipped")
         if rr.empty:
             return ("\u2013", "", ", ".join(notes))
         size_txt = base.human(rr.size) if rr.size else "\u2013"

@@ -61,6 +61,7 @@ def wipe_file(path: str, passes: int = 1) -> WipeResult:
     except OSError as exc:
         return WipeResult(path, size, passes, False, str(exc))
 
+    flush_error = ""
     try:
         with os.fdopen(fd, "r+b", buffering=0) as fh:
             for pat in _patterns(passes):
@@ -73,10 +74,12 @@ def wipe_file(path: str, passes: int = 1) -> WipeResult:
                 fh.flush()
                 try:
                     os.fsync(fh.fileno())
-                except OSError:
-                    pass
+                except OSError as exc:
+                    # The write may not be durable; report it instead of
+                    # claiming a clean wipe.
+                    flush_error = f"flush failed: {exc}"
         os.unlink(path)
-        return WipeResult(path, size, passes, True)
+        return WipeResult(path, size, passes, True, flush_error)
     except OSError as exc:
         return WipeResult(path, size, passes, False, str(exc))
 
@@ -102,6 +105,7 @@ def wipe_free_space(root: str, max_bytes: int | None = None,
         return 0, 0, "not enough free space to make wiping worthwhile"
 
     written = files = 0
+    stop_reason = ""
     folder = os.path.join(root, ".sweep-wipe")
     try:
         os.makedirs(folder, exist_ok=True)
@@ -123,7 +127,8 @@ def wipe_free_space(root: str, max_bytes: int | None = None,
                         remaining -= n
                     fh.flush()
                     os.fsync(fh.fileno())
-            except OSError:
+            except OSError as exc:
+                stop_reason = f"stopped after {files} file(s): {exc.strerror or exc}"
                 break                        # disk full or permission -> stop
             written += size
             files += 1
@@ -141,8 +146,11 @@ def wipe_free_space(root: str, max_bytes: int | None = None,
             os.rmdir(folder)
         except OSError:
             pass
-    return written, files, (f"overwrote {files} file(s), {base.human(written)}; "
-                            f"removed {removed}")
+    note = (f"overwrote {files} file(s), {base.human(written)}; "
+            f"removed {removed}")
+    if stop_reason:
+        note += f" - {stop_reason}; free space was NOT fully wiped"
+    return written, files, note
 
 
 def is_ssd(path: str) -> bool | None:

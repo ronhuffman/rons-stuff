@@ -184,6 +184,8 @@ def _print_scan(res: scanner.ScanResult, verbose: bool, admin: bool) -> None:
             badge = "needs admin"
         elif r.denied:
             badge = f"{r.denied:,} not readable"
+        elif r.skipped:
+            badge = f"{r.skipped:,} skipped"
         size_txt = base.human(r.size) if r.size else "\u2013"
         rows.append([f"  {mark}{r.name}", size_txt, f"{r.count:,}" if r.count else "", badge])
     print(table(["category", "reclaimable", "files", "note"], rows,

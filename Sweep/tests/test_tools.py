@@ -1,4 +1,4 @@
-"""Tests for secure erase, the cookie keep-list, apps, drivers and scheduling."""
+﻿"""Tests for secure erase, the cookie keep-list, apps, drivers and scheduling."""
 
 from __future__ import annotations
 
@@ -814,3 +814,53 @@ class TestCoverageHonesty(unittest.TestCase):
     def test_cancelled_scan_flag_exists(self):
         from sweep import scanner
         self.assertFalse(scanner.ScanResult().cancelled)
+
+
+class TestLowSeverityHonesty(unittest.TestCase):
+    """The quieter versions of the same bug: work that was skipped silently."""
+
+    def test_skipped_files_are_reported_on_the_clean_page(self):
+        import types
+        from sweep import gui, scanner
+        r = scanner.RuleResult(rule_id="x", name="X", group="T",
+                               needs_admin=False, risk="safe")
+        r.count, r.size, r.skipped = 3, 300, 4
+        fake = types.SimpleNamespace(_admin=True)
+        _, _, notes = gui.CleanTab._rule_values(fake, {"id": "x"}, r)
+        self.assertIn("4 skipped", notes)
+
+    def test_corrupt_keep_list_is_not_an_empty_list(self):
+        d = fresh_dir("keep-corrupt")
+        path = os.path.join(d, "keep.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("{ this is not json")
+        kl = keep.KeepList.load(path)
+        self.assertEqual(kl.domains, [])
+        self.assertTrue(kl.load_error, "a corrupt list must not look empty")
+        kl.domains = ["example.com"]
+        kl.save()
+        self.assertTrue(os.path.exists(path + ".corrupt"),
+                        "the unreadable file must be preserved before overwriting")
+
+    def test_missing_keep_list_is_not_an_error(self):
+        d = fresh_dir("keep-missing")
+        kl = keep.KeepList.load(os.path.join(d, "nothing.json"))
+        self.assertEqual(kl.domains, [])
+        self.assertEqual(kl.load_error, "", "no file yet is normal, not an error")
+
+    def test_secure_wipe_reports_and_removes(self):
+        d = fresh_dir("wipe")
+        p = os.path.join(d, "secret.bin")
+        with open(p, "wb") as fh:
+            fh.write(b"x" * 2048)
+        res = secure.wipe_file(p)
+        self.assertTrue(res.ok)
+        self.assertFalse(os.path.exists(p))
+
+    def test_registry_category_failures_can_be_collected(self):
+        from sweep import registry
+        errors: list[str] = []
+        out = registry.scan_category("no.such.category", errors)
+        self.assertEqual(out, [])
+
+

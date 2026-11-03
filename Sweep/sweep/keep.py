@@ -28,6 +28,9 @@ def default_path() -> str:
 class KeepList:
     domains: list[str] = field(default_factory=list)
     path: str = field(default_factory=default_path)
+    #: Set when the file existed but could not be read. Saving over it would
+    #: destroy a list the user believes is intact.
+    load_error: str = ""
 
     # ---- persistence ---------------------------------------------------
     @classmethod
@@ -38,12 +41,21 @@ class KeepList:
                 blob = json.load(fh)
             doms = [str(d).strip().lower() for d in blob.get("domains", []) if str(d).strip()]
             return cls(domains=sorted(set(doms)), path=p)
-        except (OSError, ValueError):
-            return cls(domains=[], path=p)
+        except FileNotFoundError:
+            return cls(domains=[], path=p)      # genuinely no list yet
+        except (OSError, ValueError) as exc:
+            return cls(domains=[], path=p, load_error=str(exc))
 
     def save(self, path: str | None = None) -> str:
         p = path or self.path
         os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
+        if self.load_error and os.path.exists(p):
+            # Keep a copy of what could not be parsed before replacing it.
+            try:
+                with open(p, "rb") as src, open(p + ".corrupt", "wb") as dst:
+                    dst.write(src.read())
+            except OSError:
+                pass
         tmp = p + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump({"domains": self.domains}, fh, indent=2)
