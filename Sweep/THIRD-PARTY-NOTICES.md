@@ -25,10 +25,16 @@ licence:
 
 ## Full licence texts
 
-* `licenses\python\LICENSE.txt` in the build is copied, at build time, from the
-  Python installation used to make it. It holds the Python licence and the
-  licences of the libraries that Python's Windows build ships with. `Sweep.spec`
-  refuses to build if that file is missing.
+* `licenses\python\LICENSE.txt` is copied, at build time, from the Python
+  installation used to make the build. It holds the Python licence, the terms
+  for the Microsoft runtime, and the licences of bzip2, libffi, OpenSSL (Apache
+  2.0) and Tcl/Tk. `Sweep.spec` refuses to build if that file is missing.
+* `licenses\python\python-3.12-incorporated-software.txt` is Python's own list of
+  licences for code built into it - including expat and libmpdec, which the file
+  above does not cover - copied from the Python 3.12.10 documentation. The
+  source copy is `licenses\` in this repository.
+* SQLite and liblzma (xz) are in the public domain (newer xz releases use 0BSD);
+  neither requires a notice.
 * PyInstaller's licence, including the bootloader exception:
   <https://github.com/pyinstaller/pyinstaller/blob/develop/COPYING.txt>
 

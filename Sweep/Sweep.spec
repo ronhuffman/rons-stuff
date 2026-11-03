@@ -2,11 +2,11 @@
 import os
 import sys
 
-# The licence of the Python this build bundles. It covers Python and the
-# libraries the python.org Windows build ships with (OpenSSL, Tcl/Tk, SQLite,
-# zlib, bzip2, xz, libffi, expat, mpdecimal, the Microsoft runtime). Their
-# licences require the notices to travel with the program, so a build without
-# them is refused rather than shipped.
+# The licence file of the Python this build bundles: Python itself, the Microsoft
+# runtime, bzip2, libffi, OpenSSL and Tcl/Tk. Python's acknowledgements for the
+# code built into it (expat, libmpdec, zlib, ...) are vendored under licenses\.
+# These licences require their notices to travel with the program, so a build
+# without them is refused rather than shipped.
 PY_LICENSE = os.path.join(sys.base_prefix, 'LICENSE.txt')
 if not os.path.isfile(PY_LICENSE):
     raise SystemExit(f"Python licence not found at {PY_LICENSE} - refusing to build "
@@ -20,7 +20,8 @@ a = Analysis(
     datas=[('docs\\icon.png', 'docs'),
            ('LICENSE', '.'),
            ('THIRD-PARTY-NOTICES.md', '.'),
-           (PY_LICENSE, 'licenses\\python')],
+           (PY_LICENSE, 'licenses\\python'),
+           ('licenses\\python-3.12-incorporated-software.txt', 'licenses\\python')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

@@ -648,9 +648,10 @@ Notes that matter if you change this:
   without retyping the flags.
 * `build/` and `dist/` are gitignored — the binary is a release artefact, not
   source.
-* `Sweep.spec` bundles `LICENSE`, `THIRD-PARTY-NOTICES.md` and the `LICENSE.txt`
-  of the Python used for the build (under `_internal\licenses\python\`). The
-  build stops if that file is missing, so a binary never ships without them.
+* `Sweep.spec` bundles `LICENSE`, `THIRD-PARTY-NOTICES.md`, the `LICENSE.txt` of
+  the Python used for the build and Python's acknowledgements for software built
+  into it (both under `_internal\licenses\python\`). The build stops if the
+  Python licence is missing, so a binary never ships without its notices.
 
 ---
 
