@@ -4,11 +4,33 @@
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
 
-$root = "C:\Users\huffm\OneDrive\Desktop\Deep\sweep"
-$py = "C:\Users\huffm\AppData\Local\Programs\Python\Python312\python.exe"
+# Derive the project root from this script's location. A hardcoded path meant
+# this harness silently did nothing after the project moved - and still exited 0.
+$root = Split-Path -Parent $PSScriptRoot
+if (-not (Test-Path -LiteralPath (Join-Path $root "sweep"))) {
+    Write-Error "Cannot locate the Sweep project from '$PSScriptRoot'"
+    exit 2
+}
+
+$py = (Get-Command python -ErrorAction SilentlyContinue).Source
+if (-not $py) {
+    $candidate = Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\python.exe"
+    if (Test-Path -LiteralPath $candidate) { $py = $candidate }
+}
+if (-not $py) {
+    Write-Error "No python interpreter found on PATH"
+    exit 2
+}
+
 $report = Join-Path $root "docs\verification.md"
+if (-not (Test-Path -LiteralPath (Split-Path -Parent $report))) {
+    Write-Error "Report directory does not exist: $(Split-Path -Parent $report)"
+    exit 2
+}
 
 Set-Location $root
+Write-Host "root: $root"
+Write-Host "py  : $py"
 
 function W($text) {
     Add-Content -LiteralPath $report -Value $text -Encoding utf8
@@ -91,4 +113,9 @@ W "---"
 W ""
 W ("Finished: " + (Get-Date -Format "yyyy-MM-dd HH:mm:ss"))
 Write-Host ""
+if (-not (Test-Path -LiteralPath $report)) {
+    Write-Error "No report was written - verification did not run"
+    exit 1
+}
 Write-Host "Verification complete -> $report"
+exit 0
