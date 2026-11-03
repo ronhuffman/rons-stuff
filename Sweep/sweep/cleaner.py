@@ -123,6 +123,20 @@ def _is_denied(exc: OSError) -> bool:
     return exc.errno in (13,)          # EACCES
 
 
+def restore_point_note(ok: bool, msg: str) -> str:
+    """The one-line restore-point outcome for a clean report.
+
+    "created" only when a restore point was really made by this run. A skipped
+    point (Windows allows one per 24 hours) and an unconfirmed one keep their
+    own wording, so neither can be read as "created".
+    """
+    if ok:
+        return "created - " + msg
+    if msg.startswith(("skipped -", "unconfirmed -")):
+        return msg
+    return "not created - " + msg
+
+
 def clean(scan_result: scanner.ScanResult,
           rule_ids: list[str] | None = None,
           confirm: bool = False,
@@ -175,7 +189,7 @@ def clean(scan_result: scanner.ScanResult,
             rp_ok, rp_msg = system.create_restore_point("Sweep: before cleaning")
         except Exception as exc:                       # never block the clean
             rp_ok, rp_msg = False, f"restore point failed: {exc}"
-        report.restore_point = ("created - " if rp_ok else "not created - ") + rp_msg
+        report.restore_point = restore_point_note(rp_ok, rp_msg)
         if log:
             log.write(result="restore-point", ok=rp_ok, detail=rp_msg)
 

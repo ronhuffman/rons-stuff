@@ -16,6 +16,7 @@ import os
 import subprocess
 import winreg
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 
 from . import base
 
@@ -701,28 +702,145 @@ class _STATEMGRSTATUS(ctypes.Structure):
 
 
 _BEGIN_SYSTEM_CHANGE = 100
+_END_SYSTEM_CHANGE = 101
 _MODIFY_SETTINGS = 12
 
-#: Win32 codes SRSetRestorePointW can report, in plain language.
+#: Win32 codes SRSetRestorePointW can report (STATEMGRSTATUS.nStatus), in plain
+#: language. Everything except 0 (ERROR_SUCCESS) is a failure.
 _RESTORE_ERRORS = {
     5: "access denied - run as administrator",
+    10: "Windows is in safe mode, where restore points cannot be made",
+    13: "System Restore rejected the request (invalid sequence number)",
+    112: "System Restore is paused because the drive is low on space",
     1058: ("System Protection is turned off for this drive. Enable it in System "
            "Properties > System Protection, then try again"),
     1060: "the System Restore service is not running",
-    112: "not enough disk space to create a restore point",
+    1359: "System Restore reported an internal error",
+    1460: "System Restore was busy with another restore point and timed out",
     0x8007045D: "the drive returned an I/O error",
 }
 
+#: What a restore point is for, said wherever one is reported. System Restore
+#: does not bring back personal files, so it must never read as an undo for a
+#: clean. The Recycle Bin option is the undo for deleted files.
+RESTORE_SCOPE = ("A restore point can roll back Windows settings, the registry and "
+                 "installed programs. It does not bring back deleted files - "
+                 "use “Send to Recycle Bin” for that.")
+
+
+@dataclass
+class RestorePoint:
+    sequence: int
+    created: "datetime | None"
+    description: str
+
+    def when(self) -> str:
+        if self.created is None:
+            return "earlier"
+        return "at " + self.created.astimezone().strftime("%Y-%m-%d %H:%M")
+
+
+def parse_restore_point(line: str) -> RestorePoint | None:
+    """Parse one ``sequence|creation time|description`` line written by
+    :func:`newest_restore_point`'s PowerShell. The creation time is WMI's DMTF
+    form, ``yyyymmddHHMMSS.ffffff+UUU`` (offset in minutes). None if malformed."""
+    parts = (line or "").strip().split("|", 2)
+    if len(parts) < 2:
+        return None
+    try:
+        seq = int(parts[0])
+    except ValueError:
+        return None
+    return RestorePoint(sequence=seq, created=_parse_dmtf(parts[1]),
+                        description=parts[2].strip() if len(parts) > 2 else "")
+
+
+def _parse_dmtf(text: str) -> "datetime | None":
+    text = (text or "").strip()
+    try:
+        stamp = datetime.strptime(text[:14], "%Y%m%d%H%M%S")
+    except ValueError:
+        return None
+    offset = 0
+    tail = text[21:] if len(text) > 21 and text[14:15] == "." else ""
+    if tail[:1] in ("+", "-") and tail[1:].isdigit():
+        offset = int(tail[1:]) * (1 if tail[0] == "+" else -1)
+    return stamp.replace(tzinfo=timezone(timedelta(minutes=offset)))
+
+
+def newest_restore_point() -> tuple[RestorePoint | None, bool]:
+    """The newest restore point on this PC, and whether the list could be read.
+
+    (None, True) means the list was read and is empty; (None, False) means
+    Sweep could not look - the two must not be confused.
+    """
+    if not base.IS_WINDOWS:
+        return None, False
+    ps = ("$p = Get-ComputerRestorePoint -ErrorAction Stop | "
+          "Sort-Object SequenceNumber | Select-Object -Last 1; "
+          "if ($p) { '{0}|{1}|{2}' -f $p.SequenceNumber, $p.CreationTime, $p.Description }; "
+          "'ok'")
+    rc, out = _run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                   timeout=60)
+    lines = [ln for ln in out.splitlines() if ln.strip()]
+    if rc != 0 or not lines or lines[-1].strip() != "ok":
+        return None, False
+    point = parse_restore_point(lines[0]) if len(lines) > 1 else None
+    return point, True
+
+
+def _skipped_message(existing: RestorePoint) -> str:
+    return ("skipped - Windows lets programs make only one restore point per 24 "
+            f"hours, and one was already made {existing.when()} "
+            f"(\u201c{existing.description or 'no description'}\u201d); "
+            "that one is still available")
+
+
+def restore_outcome(api_ok: bool, status: int, sequence: int,
+                    before: RestorePoint | None, before_known: bool,
+                    after: RestorePoint | None = None, after_known: bool = False,
+                    started: "datetime | None" = None) -> tuple[str, str]:
+    """Decide what SRSetRestorePointW actually did. Pure, so it can be tested.
+
+    Returns (kind, message) with kind one of "created", "skipped", "unconfirmed"
+    or "failed". The trap it guards against: since Windows 8 the API skips the
+    restore point when one was made in the last 24 hours, yet still returns
+    TRUE with ERROR_SUCCESS and the *previous* point's sequence number. Only a
+    sequence number newer than the newest point before the call is a new point.
+    """
+    if status != 0:
+        return "failed", _RESTORE_ERRORS.get(
+            int(status), f"System Restore returned code {int(status)}")
+    if not api_ok:
+        return "failed", "System Restore did not accept the request"
+    if before_known and sequence:
+        if before is None or sequence > before.sequence:
+            return "created", f"sequence {sequence}"
+        return "skipped", _skipped_message(before)
+    # No usable comparison beforehand: judge by what exists now.
+    if after_known and after is not None and after.sequence == sequence and sequence:
+        if started is not None and after.created is not None:
+            if after.created >= started - timedelta(minutes=2):
+                return "created", f"sequence {sequence}"
+            return "skipped", _skipped_message(after)
+    return "unconfirmed", (
+        "unconfirmed - System Restore accepted the request"
+        + (f" (sequence {sequence})" if sequence else "")
+        + " but Sweep could not read the list of restore points to check that a new one exists")
+
 
 def create_restore_point(description: str = "Sweep: before cleaning") -> tuple[bool, str]:
-    """Create a System Restore point.
+    """Create a System Restore point and say exactly what happened.
 
-    Uses SRSetRestorePointW directly rather than ``Checkpoint-Computer``: the
-    PowerShell cmdlet is throttled to one restore point per 24 hours and fails
-    quietly inside that window, which would make "a restore point was made" an
-    unreliable claim.
+    Calls SRSetRestorePointW. Like ``Checkpoint-Computer``, it is subject to
+    Windows' one-restore-point-per-24-hours limit, and inside that window it
+    reports success without making anything - so the newest restore point is
+    read before the call and compared afterwards (see :func:`restore_outcome`).
+    A new point is closed with END_SYSTEM_CHANGE, as the API documents.
 
-    Returns (ok, message). Never raises - the caller decides what to do.
+    Returns (ok, message): ok is True only for a restore point that was really
+    made by this call. A skipped or unconfirmed attempt returns False with a
+    message that starts with "skipped -" or "unconfirmed -". Never raises.
     """
     if not base.IS_WINDOWS:
         return False, "System Restore is Windows-only"
@@ -733,6 +851,9 @@ def create_restore_point(description: str = "Sweep: before cleaning") -> tuple[b
     except OSError as exc:
         return False, f"System Restore API unavailable ({exc})"
 
+    before, before_known = newest_restore_point()
+    started = datetime.now(timezone.utc)
+
     info = _RESTOREPOINTINFO()
     info.dwEventType = _BEGIN_SYSTEM_CHANGE
     info.dwRestorePtType = _MODIFY_SETTINGS
@@ -741,20 +862,37 @@ def create_restore_point(description: str = "Sweep: before cleaning") -> tuple[b
     status = _STATEMGRSTATUS()
 
     try:
-        ok = srclient.SRSetRestorePointW(ctypes.byref(info), ctypes.byref(status))
+        api_ok = bool(srclient.SRSetRestorePointW(ctypes.byref(info), ctypes.byref(status)))
     except (AttributeError, OSError) as exc:
         return False, f"could not call System Restore ({exc})"
 
-    if ok and status.nStatus == 0:
-        # The API writes the sequence into the request struct; the status struct
-        # can report 0, which produced a misleading "sequence 0".
-        seq = int(info.llSequenceNumber or 0) or int(status.llSequenceNumber or 0)
-        if seq:
-            return True, f"restore point created (sequence {seq})"
-        return True, "restore point created"
-    reason = _RESTORE_ERRORS.get(int(status.nStatus),
-                                 f"System Restore returned code {int(status.nStatus)}")
-    return False, reason
+    # The documented place for the sequence number is the status struct.
+    seq = int(status.llSequenceNumber or 0) or int(info.llSequenceNumber or 0)
+    after, after_known = (None, False)
+    if api_ok and int(status.nStatus) == 0 and not (before_known and seq):
+        after, after_known = newest_restore_point()
+    kind, msg = restore_outcome(api_ok, int(status.nStatus), seq, before, before_known,
+                                after, after_known, started)
+    if kind == "created" and seq:
+        _end_restore_point(srclient, seq, description)
+        msg = f"“{description}”, {msg}"
+    return kind == "created", msg
+
+
+def _end_restore_point(srclient, sequence: int, description: str) -> None:
+    """Close a BEGIN_SYSTEM_CHANGE restore point. Best effort: the point already
+    exists once BEGIN succeeds, so a failure here is not reported as a failure
+    to create it."""
+    info = _RESTOREPOINTINFO()
+    info.dwEventType = _END_SYSTEM_CHANGE
+    info.dwRestorePtType = _MODIFY_SETTINGS
+    info.llSequenceNumber = sequence
+    info.szDescription = description[:255]
+    status = _STATEMGRSTATUS()
+    try:
+        srclient.SRSetRestorePointW(ctypes.byref(info), ctypes.byref(status))
+    except (AttributeError, OSError):
+        pass
 
 
 def restore_point_supported() -> tuple[bool, str]:

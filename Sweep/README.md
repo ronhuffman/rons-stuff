@@ -382,8 +382,11 @@ Ranked by actual benefit to a laptop, not by how good it sounds in a feature lis
 2. **Health watchdog with alerting.** The scheduler already runs cleaning; it
    should also snapshot health and *tell you* when the score drops or a check
    flips to bad. The history file already exists.
-3. **Restore point before any clean.** One `Checkpoint-Computer` call turns a
-   regretted clean into an undo. Cheap, high value.
+3. **Restore point before any clean.** Done. It can roll back settings, the
+   registry and installed programs, but it does not bring back deleted files -
+   "Send to Recycle Bin" is the undo for those. Windows also lets a program make
+   only one restore point per 24 hours and reports success when it skips one;
+   Sweep compares sequence numbers and says "skipped" instead of "created".
 4. **Backup verification.** Most people find out their backup was not running
    when they need it. Check File History / OneDrive / System Restore is enabled
    *and* that a recent restore point or backup actually exists.

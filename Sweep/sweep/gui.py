@@ -1060,6 +1060,33 @@ def update_summary(total: int, notes: list[str], missed: list[str] | None = None
     return "everything visible to Sweep is current"
 
 
+def restore_point_dialog(ok: bool, msg: str, scope: str) -> tuple[str, str, str, str]:
+    """(title, text, level, status) for the outcome of "Create a restore point now".
+
+    level is "info" or "warning". Pure, so the wording can be tested. Only a
+    point really made by this call is reported as created; Windows' 24-hour
+    skip is explained rather than passed off as success or as an error.
+    """
+    def sentence(s: str) -> str:
+        s = (s or "").strip().rstrip(".")
+        return (s[:1].upper() + s[1:] + ".") if s else ""
+
+    title = "System Restore"
+    if ok:
+        return (title, f"Restore point created: {msg}.\n\n{scope}", "info",
+                f"restore point created ({msg})")
+    if msg.startswith("skipped - "):
+        return (title, "No new restore point was made.\n\n"
+                + sentence(msg[len("skipped - "):]) + "\n\n" + scope, "info",
+                "no new restore point - one was already made in the last 24 hours")
+    if msg.startswith("unconfirmed - "):
+        return (title, "Sweep could not confirm that a restore point was made.\n\n"
+                + sentence(msg[len("unconfirmed - "):]), "warning",
+                "restore point not confirmed")
+    return (title, "No restore point was created.\n\n" + sentence(msg), "warning",
+            "no restore point: " + _short_note(msg))
+
+
 def _short_note(note: str, limit: int = 90) -> str:
     """First clause of a failure message, so a status line stays one line. Cuts
     on a clause or word boundary, never mid-token - a truncated error code such
@@ -1562,6 +1589,10 @@ class CleanTab(ttk.Frame):
                        "\n  ".join(c.name for c in caution))
         if self.app.recycle_var.get():
             msg.append("\n\nFiles go to the Recycle Bin, so this can be undone.")
+        else:
+            msg.append("\n\nFiles are deleted permanently. A restore point does not "
+                       "bring files back - tick \u201cSend to Recycle Bin\u201d if you "
+                       "may want them.")
         msg.append("\n\nFiles in use are skipped. An audit log is written to\n"
                    "%LOCALAPPDATA%\\Sweep\\logs\\")
         if not messagebox.askyesno("Confirm clean", "".join(msg), icon="warning"):
@@ -2186,6 +2217,7 @@ class AppsPanel(_ToolPanel):
         ], tree_heading="Program", tree_width=px(300),
             empty_text="Press Load applications to list installed programs")
         self.table.pack(fill="both", expand=True)
+        self.notice = _Notice(body)
         self._apps: dict[str, object] = {}
 
     def _needle(self) -> str:
@@ -2228,12 +2260,15 @@ class AppsPanel(_ToolPanel):
                 # A short list must not read as "that is everything installed".
                 status = (f"{len(items)} application(s)   \u00b7   {len(read_errors)} "
                           "registry location(s) not readable")
+                reason = "; ".join(read_errors[:2])
+                action = (("Restart as administrator", self.app._elevate)
+                          if not base.is_admin() and _needs_admin(reason) else None)
                 self.notice.show(
-                    "Some installed programs could not be listed: "
-                    + "; ".join(read_errors[:2])
-                    + (" - restart as administrator to see them all.",
-                       )[0],
-                    action=("Restart as administrator", self.app._elevate))
+                    "This list may be incomplete - some installed programs could "
+                    "not be read: " + reason, action,
+                    fill="x", padx=px(10), pady=(px(10), 0), before=self.table)
+            else:
+                self.notice.hide()
             self.set_status(status)
             if not items:
                 self.table.set_empty(
@@ -2388,11 +2423,15 @@ class DriversPanel(_ToolPanel):
                     "The driver inventory could not be read, so Sweep does not "
                     "know which drivers are installed.")
                 self.set_status("driver inventory unavailable")
+                self._notice_for = "inventory"
                 self.notice.show(
                     "Driver inventory could not be read: " + "; ".join(read_errors[:2]),
                     action=("Restart as administrator", self.app._elevate)
-                    if not base.is_admin() else None)
+                    if not base.is_admin() else None,
+                    fill="x", padx=px(10), pady=(0, px(8)), before=self.views)
             else:
+                if getattr(self, "_notice_for", "") == "inventory":
+                    self.notice.hide()
                 self.set_status(f"{len(items)} kernel driver(s) installed")
 
         self.run(job, on_done=done, text="reading driver registry\u2026")
@@ -2413,12 +2452,14 @@ class DriversPanel(_ToolPanel):
                                          "cannot say whether your drivers are current.")
                 action = (("Restart as administrator", self.app._elevate)
                           if not base.is_admin() and _needs_admin(err) else None)
+                self._notice_for = "updates"
                 self.notice.show("Windows Update could not be checked.\n" + err, action,
                                  fill="x", padx=px(10), pady=(0, px(8)),
                                  before=self.views)
                 self.set_status("driver updates not checked")
                 return
-            self.notice.hide()
+            if getattr(self, "_notice_for", "") == "updates":
+                self.notice.hide()
             for u in items:
                 if not u.is_driver:
                     continue
@@ -3280,19 +3321,39 @@ class SweepApp(tk.Tk):
             m.grab_release()
 
     def _make_restore_point(self) -> None:
-        """Create a System Restore point and report exactly what happened."""
+        """Create a System Restore point and report exactly what happened.
+
+        Runs off the UI thread: System Restore can take a minute, and the window
+        must not freeze while it works."""
         from . import system
-        ok, msg = system.create_restore_point("Sweep: manual restore point")
-        self.set_status(msg)
-        if ok:
-            messagebox.showinfo("System Restore", "Restore point created.\n\n" + msg,
-                                parent=self)
-        else:
-            messagebox.showwarning(
-                "System Restore",
-                "No restore point was created.\n\n" + msg
-                + "\n\nSweep will still clean, but this run will not be undoable.",
-                parent=self)
+        running = getattr(self, "_rp_thread", None)
+        if running is not None and running.is_alive():
+            self.set_status("a restore point is already being created\u2026")
+            return
+        box: dict = {}
+
+        def work():
+            try:
+                box["result"] = system.create_restore_point("Sweep: manual restore point")
+            except Exception as exc:                  # surfaced below, never lost
+                box["result"] = (False, f"could not call System Restore ({exc})")
+
+        self._rp_thread = threading.Thread(target=work, daemon=True)
+        self._rp_thread.start()
+        self.set_status("creating a restore point - this can take a minute\u2026")
+
+        def poll():
+            if self._rp_thread.is_alive():
+                self.after(250, poll)
+                return
+            ok, msg = box.get("result", (False, "System Restore gave no answer"))
+            title, text, level, status = restore_point_dialog(ok, msg,
+                                                              system.RESTORE_SCOPE)
+            self.set_status(status)
+            show = messagebox.showinfo if level == "info" else messagebox.showwarning
+            show(title, text, parent=self)
+
+        self.after(250, poll)
 
     def _shortcuts(self) -> None:
         lines = []
